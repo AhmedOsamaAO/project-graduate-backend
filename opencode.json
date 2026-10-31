@@ -10,6 +10,7 @@
       "*": "allow",
       ".env*": "deny",
       ".env.example": "allow",
+      ".env.test.example": "allow",
     },
   },
 }

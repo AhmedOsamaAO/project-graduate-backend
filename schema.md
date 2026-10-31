@@ -1,3 +1,8 @@
+// SUPERSEDED: this is the original DBML design, kept frozen for reference only.
+// The reconciled model is defined by the backend model resolution linked from MVP.md
+// and, once implemented, by prisma/schema.prisma, which is the single source of truth.
+// Do not update this file to match the implementation.
+
 // Use DBML to define your database structure
 // Docs: https://dbml.dbdiagram.io/docs
 
