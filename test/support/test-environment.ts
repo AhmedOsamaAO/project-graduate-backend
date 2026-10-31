@@ -9,13 +9,17 @@ export interface TestEnvironment {
 
 /**
  * Creates an isolated database and storage directory, switches the process to
- * the disposable database, and restores the previous configuration on close.
+ * the disposable resources, and restores the previous configuration on close.
  */
 export async function createTestEnvironment(): Promise<TestEnvironment> {
   const database = await createTestDatabase();
   const storage = await createTestStorage();
   const previousDatabaseUrl = process.env.DATABASE_URL;
+  const previousStorageRoot = process.env.PRIVATE_STORAGE_ROOT;
+
   process.env.DATABASE_URL = database.url;
+  process.env.PRIVATE_STORAGE_ROOT = storage.path;
+
   let closed = false;
 
   return {
@@ -31,6 +35,12 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
         delete process.env.DATABASE_URL;
       } else {
         process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+
+      if (previousStorageRoot === undefined) {
+        delete process.env.PRIVATE_STORAGE_ROOT;
+      } else {
+        process.env.PRIVATE_STORAGE_ROOT = previousStorageRoot;
       }
 
       try {

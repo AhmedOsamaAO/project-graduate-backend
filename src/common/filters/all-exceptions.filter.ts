@@ -1,0 +1,102 @@
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  Logger,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { ApiError } from '../errors/api-error';
+import {
+  STATUS_ERRORS,
+  statusError,
+  type ErrorEnvelope,
+} from '../errors/error-codes';
+
+const INTERNAL_ERROR: ErrorEnvelope = STATUS_ERRORS[500];
+
+@Catch()
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
+
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const context = host.switchToHttp();
+    const response = context.getResponse<Response>();
+    const request = context.getRequest<Request>();
+
+    if (response.headersSent) {
+      return;
+    }
+
+    const { status, body } = toErrorResponse(exception);
+
+    if (status >= 500) {
+      this.logUnexpected(exception, request.method, body.code);
+    }
+
+    response.status(status).json(body);
+  }
+
+  private logUnexpected(
+    exception: unknown,
+    method: string,
+    code: ErrorEnvelope['code'],
+  ): void {
+    const name = exception instanceof Error ? exception.name : 'UnknownError';
+    const frames =
+      exception instanceof Error ? stackFrames(exception.stack) : '';
+
+    // Never log exception messages or request URLs: they can contain national
+    // IDs, credentials, query text, or raw database errors. Stack frames are
+    // safe operator context; the request method is intentionally coarse.
+    this.logger.error(
+      `Unhandled ${method} request (${String(code)}, ${name})${
+        frames ? `\n${frames}` : ''
+      }`,
+    );
+  }
+}
+
+function toErrorResponse(exception: unknown): {
+  status: number;
+  body: ErrorEnvelope;
+} {
+  if (exception instanceof ApiError) {
+    const response = exception.getResponse();
+    const body = isErrorEnvelope(response)
+      ? response
+      : { code: exception.code, message: exception.message };
+
+    return { status: exception.getStatus(), body };
+  }
+
+  if (exception instanceof HttpException) {
+    const status = exception.getStatus();
+
+    // Plain Nest exceptions may carry parser, database, or filesystem text.
+    // Only ApiError payloads are trusted to provide a public message.
+    return { status, body: statusError(status) };
+  }
+
+  return { status: 500, body: INTERNAL_ERROR };
+}
+
+function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).code === 'string' &&
+    typeof (value as Record<string, unknown>).message === 'string'
+  );
+}
+
+function stackFrames(stack: string | undefined): string {
+  if (!stack) {
+    return '';
+  }
+
+  return stack
+    .split('\n')
+    .filter((line) => /^\s+at\s/.test(line))
+    .join('\n');
+}
