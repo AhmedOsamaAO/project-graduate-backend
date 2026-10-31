@@ -8,16 +8,12 @@ import {
 import type { Request, Response } from 'express';
 import { ApiError } from '../errors/api-error';
 import {
-  ERROR_CODES,
-  STATUS_TO_ERROR_CODE,
-  STATUS_TO_MESSAGE,
+  STATUS_ERRORS,
+  statusError,
   type ErrorEnvelope,
 } from '../errors/error-codes';
 
-const INTERNAL_ERROR: ErrorEnvelope = {
-  code: ERROR_CODES.INTERNAL_ERROR,
-  message: STATUS_TO_MESSAGE[500],
-};
+const INTERNAL_ERROR: ErrorEnvelope = STATUS_ERRORS[500];
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -77,67 +73,21 @@ function toErrorResponse(exception: unknown): {
   if (exception instanceof HttpException) {
     const status = exception.getStatus();
 
-    if (status >= 500) {
-      return {
-        status,
-        body: {
-          code: STATUS_TO_ERROR_CODE[status] ?? ERROR_CODES.SERVICE_UNAVAILABLE,
-          message: STATUS_TO_MESSAGE[status] ?? STATUS_TO_MESSAGE[503],
-        },
-      };
-    }
-
-    return { status, body: publicHttpError(exception, status) };
+    // Plain Nest exceptions may carry parser, database, or filesystem text.
+    // Only ApiError payloads are trusted to provide a public message.
+    return { status, body: statusError(status) };
   }
 
   return { status: 500, body: INTERNAL_ERROR };
 }
 
-function publicHttpError(
-  exception: HttpException,
-  status: number,
-): ErrorEnvelope {
-  const response = exception.getResponse();
-  const fallbackCode = STATUS_TO_ERROR_CODE[status] ?? ERROR_CODES.BAD_REQUEST;
-  const fallbackMessage = STATUS_TO_MESSAGE[status] ?? 'Request failed';
-
-  if (typeof response === 'string') {
-    return { code: fallbackCode, message: response };
-  }
-
-  if (!isRecord(response)) {
-    return { code: fallbackCode, message: fallbackMessage };
-  }
-
-  if (Array.isArray(response.message)) {
-    return {
-      code: status === 400 ? ERROR_CODES.VALIDATION_ERROR : fallbackCode,
-      message: status === 400 ? 'Validation failed' : fallbackMessage,
-      details: response.message,
-    };
-  }
-
-  const code = typeof response.code === 'string' ? response.code : fallbackCode;
-  const message =
-    typeof response.message === 'string' ? response.message : fallbackMessage;
-
-  return {
-    code,
-    message,
-    ...(response.details === undefined ? {} : { details: response.details }),
-  };
-}
-
 function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
   return (
-    isRecord(value) &&
-    typeof value.code === 'string' &&
-    typeof value.message === 'string'
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).code === 'string' &&
+    typeof (value as Record<string, unknown>).message === 'string'
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function stackFrames(stack: string | undefined): string {

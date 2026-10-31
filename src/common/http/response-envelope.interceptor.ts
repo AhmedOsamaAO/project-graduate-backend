@@ -23,7 +23,6 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
       map((value: unknown) => {
         if (
           value === undefined ||
-          value === null ||
           value instanceof StreamableFile ||
           isPageResult(value)
         ) {

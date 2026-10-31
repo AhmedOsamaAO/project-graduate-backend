@@ -177,17 +177,15 @@ function parseInteger(
     return defaultValue;
   }
 
-  if (!/^\d+$/.test(value.trim())) {
-    throw new ConfigurationError(
-      `${name} must be an integer between ${minimum} and ${maximum}`,
-    );
+  const expected = `${name} must be an integer between ${minimum} and ${maximum}`;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ConfigurationError(expected);
   }
 
-  const parsed = Number(value);
+  const parsed = Number(trimmed);
   if (parsed < minimum || parsed > maximum) {
-    throw new ConfigurationError(
-      `${name} must be an integer between ${minimum} and ${maximum}`,
-    );
+    throw new ConfigurationError(expected);
   }
   return parsed;
 }
@@ -295,6 +293,11 @@ function parseFrontendOrigins(
   if (new Set(origins).size !== origins.length) {
     throw new ConfigurationError(
       'FRONTEND_ORIGINS must not contain duplicate origins',
+    );
+  }
+  if (isProduction && origins.length !== 1) {
+    throw new ConfigurationError(
+      'FRONTEND_ORIGINS must contain exactly one origin in production',
     );
   }
 

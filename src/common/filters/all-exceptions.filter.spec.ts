@@ -58,6 +58,21 @@ describe('AllExceptionsFilter', () => {
     },
   );
 
+  it('does not expose plain HttpException messages from any status', () => {
+    const response = createResponse();
+
+    filter.catch(
+      new HttpException('raw parser output from body', 400),
+      createHost(response),
+    );
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.json).toHaveBeenCalledWith({
+      code: 'BAD_REQUEST',
+      message: 'Bad request',
+    });
+  });
+
   it('returns a generic error for unexpected failures', () => {
     const response = createResponse();
 

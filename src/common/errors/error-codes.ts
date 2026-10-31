@@ -19,24 +19,41 @@ export interface ErrorEnvelope {
   readonly details?: unknown;
 }
 
-export const STATUS_TO_ERROR_CODE: Readonly<Record<number, ErrorCode>> = {
-  400: ERROR_CODES.BAD_REQUEST,
-  401: ERROR_CODES.UNAUTHENTICATED,
-  403: ERROR_CODES.FORBIDDEN,
-  404: ERROR_CODES.NOT_FOUND,
-  409: ERROR_CODES.CONFLICT,
-  429: ERROR_CODES.RATE_LIMITED,
-  500: ERROR_CODES.INTERNAL_ERROR,
-  503: ERROR_CODES.SERVICE_UNAVAILABLE,
+interface StatusError {
+  readonly code: ErrorCode;
+  readonly message: string;
+}
+
+export const STATUS_ERRORS: Readonly<Record<number, StatusError>> = {
+  400: { code: ERROR_CODES.BAD_REQUEST, message: 'Bad request' },
+  401: {
+    code: ERROR_CODES.UNAUTHENTICATED,
+    message: 'Authentication required',
+  },
+  403: { code: ERROR_CODES.FORBIDDEN, message: 'Forbidden' },
+  404: { code: ERROR_CODES.NOT_FOUND, message: 'Not found' },
+  409: { code: ERROR_CODES.CONFLICT, message: 'Conflict' },
+  429: { code: ERROR_CODES.RATE_LIMITED, message: 'Too many requests' },
+  500: {
+    code: ERROR_CODES.INTERNAL_ERROR,
+    message: 'An unexpected error occurred',
+  },
+  503: {
+    code: ERROR_CODES.SERVICE_UNAVAILABLE,
+    message: 'Service unavailable',
+  },
 };
 
-export const STATUS_TO_MESSAGE: Readonly<Record<number, string>> = {
-  400: 'Bad request',
-  401: 'Authentication required',
-  403: 'Forbidden',
-  404: 'Not found',
-  409: 'Conflict',
-  429: 'Too many requests',
-  500: 'An unexpected error occurred',
-  503: 'Service unavailable',
-};
+/**
+ * Returns the shared code and safe message for an HTTP status. Unknown 4xx
+ * statuses use the generic request error; unknown 5xx statuses are treated as
+ * unavailable rather than exposing an exception message.
+ */
+export function statusError(status: number): StatusError {
+  return (
+    STATUS_ERRORS[status] ??
+    (status >= 500
+      ? STATUS_ERRORS[503]
+      : { code: ERROR_CODES.BAD_REQUEST, message: 'Request failed' })
+  );
+}

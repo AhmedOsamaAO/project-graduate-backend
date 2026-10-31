@@ -25,10 +25,14 @@ export async function createApplication(
   const config = resolveConfiguration(options);
   const app = await NestFactory.create(AppModule.register(config));
 
-  configureApplication(app, config);
-  await app.init();
-
-  return app;
+  try {
+    configureApplication(app, config);
+    await app.init();
+    return app;
+  } catch (error) {
+    await app.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 /**

@@ -15,25 +15,14 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { configureApplication } from '../src/bootstrap';
-import { createPage } from '../src/common/http/page';
+import type { ErrorEnvelope } from '../src/common/errors/error-codes';
+import { createPage, type PageResult } from '../src/common/http/page';
+import { PageQueryDto } from '../src/common/http/page-query.dto';
 import { loadAppConfig } from '../src/config/app-config';
 import {
   createTestEnvironment,
   type TestEnvironment,
 } from './support/test-environment';
-
-interface ErrorBody {
-  code: string;
-  message: string;
-  details?: unknown;
-}
-
-interface PlatformPage {
-  items: unknown[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
 
 interface OpenApiDocument {
   paths: Record<string, { get?: { responses: Record<string, unknown> } }>;
@@ -58,6 +47,11 @@ class ProbeController {
     return createPage([{ id: 1, name: 'record' }], 1, 1, 20);
   }
 
+  @Get('page-query')
+  pageQuery(@Query() query: PageQueryDto): PageQueryDto {
+    return query;
+  }
+
   @Get('unauthenticated')
   unauthenticated(): never {
     throw new UnauthorizedException();
@@ -76,6 +70,11 @@ class ProbeController {
   @Get('conflict')
   conflict(): never {
     throw new ConflictException();
+  }
+
+  @Get('bad-request')
+  badRequest(): never {
+    throw new HttpException('raw parser output from body', 400);
   }
 
   @Get('rate-limited')
@@ -140,7 +139,7 @@ describe('platform foundation (e2e)', () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/__probe/page')
       .expect(200);
-    const body = response.body as PlatformPage;
+    const body = response.body as PageResult<unknown>;
 
     expect(body).toEqual({
       items: [{ id: 1, name: 'record' }],
@@ -150,11 +149,32 @@ describe('platform foundation (e2e)', () => {
     });
   });
 
+  it('applies the default page size and rejects values over the maximum', async () => {
+    const defaults = await request(app.getHttpServer())
+      .get('/api/v1/__probe/page-query')
+      .expect(200);
+    const defaultBody = defaults.body as { data: PageQueryDto };
+
+    expect(defaultBody.data).toMatchObject({ page: 1, pageSize: 20 });
+
+    await request(app.getHttpServer())
+      .get('/api/v1/__probe/page-query?page=2&pageSize=100')
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/v1/__probe/page-query?pageSize=101')
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .get('/api/v1/__probe/page-query?page=not-a-number')
+      .expect(400);
+  });
+
   it('rejects invalid and unknown request fields with field details', async () => {
     const missingResponse = await request(app.getHttpServer())
       .get('/api/v1/__probe/validation')
       .expect(400);
-    const missing = missingResponse.body as ErrorBody;
+    const missing = missingResponse.body as ErrorEnvelope;
 
     expect(missing).toMatchObject({
       code: 'VALIDATION_ERROR',
@@ -167,7 +187,7 @@ describe('platform foundation (e2e)', () => {
     const extraResponse = await request(app.getHttpServer())
       .get('/api/v1/__probe/validation?name=ok&extra=1')
       .expect(400);
-    const extra = extraResponse.body as ErrorBody;
+    const extra = extraResponse.body as ErrorEnvelope;
 
     expect(extra).toMatchObject({
       code: 'VALIDATION_ERROR',
@@ -191,7 +211,7 @@ describe('platform foundation (e2e)', () => {
       const response = await request(app.getHttpServer())
         .get(path)
         .expect(expectedStatus);
-      const body = response.body as ErrorBody;
+      const body = response.body as ErrorEnvelope;
 
       expect(body.code).toBe(expectedCode);
       expect(typeof body.message).toBe('string');
@@ -200,19 +220,21 @@ describe('platform foundation (e2e)', () => {
   );
 
   it.each([
-    '/api/v1/__probe/http-500',
-    '/api/v1/__probe/unexpected',
-    '/api/v1/missing-route',
-  ])('never exposes raw errors from %s', async (path) => {
+    ['/api/v1/__probe/bad-request', 400],
+    ['/api/v1/__probe/http-500', 500],
+    ['/api/v1/__probe/unexpected', 500],
+    ['/api/v1/missing-route', 404],
+  ])('never exposes raw errors from %s', async (path, expectedStatus) => {
     const response = await request(app.getHttpServer())
       .get(path)
-      .expect(path === '/api/v1/missing-route' ? 404 : 500);
-    const body = response.body as ErrorBody;
+      .expect(expectedStatus);
+    const body = response.body as ErrorEnvelope;
     const serialized = JSON.stringify(body);
 
     expect(typeof body.code).toBe('string');
     expect(typeof body.message).toBe('string');
     expect(serialized).not.toContain('SELECT * FROM');
+    expect(serialized).not.toContain('raw parser output');
     expect(serialized).not.toContain('super-secret');
     expect(serialized).not.toContain('12345678901234');
     expect(serialized).not.toContain('/srv/private');
