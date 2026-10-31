@@ -7,7 +7,12 @@ async function bootstrap(): Promise<void> {
   const app = await createApplication();
   const config = app.get<AppConfig>(APP_CONFIG);
 
-  await app.listen(config.port, config.host);
+  try {
+    await app.listen(config.port, config.host);
+  } catch (error) {
+    await app.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 bootstrap().catch((error: unknown) => {

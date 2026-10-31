@@ -29,6 +29,14 @@ function createHost(response: MockResponse): ArgumentsHost {
   } as unknown as ArgumentsHost;
 }
 
+function httpError(status: number | undefined, message: string): Error {
+  return Object.assign(new Error(message), {
+    status,
+    statusCode: status,
+    expose: true,
+  });
+}
+
 describe('AllExceptionsFilter', () => {
   let filter: AllExceptionsFilter;
 
@@ -57,6 +65,67 @@ describe('AllExceptionsFilter', () => {
       );
     },
   );
+
+  it('does not expose plain HttpException messages from any status', () => {
+    const response = createResponse();
+
+    filter.catch(
+      new HttpException('raw parser output from body', 400),
+      createHost(response),
+    );
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.json).toHaveBeenCalledWith({
+      code: 'BAD_REQUEST',
+      message: 'Bad request',
+    });
+  });
+
+  it.each([
+    [413, 'request entity too large'],
+    [415, 'unsupported charset "FOO"'],
+    [400, 'request aborted'],
+  ])(
+    'keeps the client-error status %i from middleware errors without their message',
+    (status, message) => {
+      const logger = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const response = createResponse();
+
+      filter.catch(
+        httpError(status, `${message} SELECT * FROM students`),
+        createHost(response),
+      );
+
+      expect(response.status).toHaveBeenCalledWith(status);
+      const [body] = response.json.mock.calls[0] as [
+        { code: string; message: string },
+      ];
+      expect(body.code).toBe('BAD_REQUEST');
+      expect(JSON.stringify(body)).not.toContain('SELECT * FROM students');
+      expect(logger).not.toHaveBeenCalled();
+
+      logger.mockRestore();
+    },
+  );
+
+  it.each([
+    ['a server status', 500],
+    ['a non-error status', 200],
+    ['a missing status', undefined],
+  ])('treats a middleware error with %s as unexpected', (_label, status) => {
+    const logger = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const response = createResponse();
+
+    filter.catch(httpError(status, 'raw detail'), createHost(response));
+
+    expect(response.status).toHaveBeenCalledWith(500);
+    expect(response.json).toHaveBeenCalledWith({
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred',
+    });
+
+    logger.mockRestore();
+  });
 
   it('returns a generic error for unexpected failures', () => {
     const response = createResponse();

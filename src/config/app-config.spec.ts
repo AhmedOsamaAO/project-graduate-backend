@@ -146,6 +146,16 @@ describe('loadAppConfig', () => {
     );
   });
 
+  it('rejects multiple production frontend origins', () => {
+    expect(() =>
+      loadAppConfig({
+        ...productionEnv(),
+        FRONTEND_ORIGINS:
+          'https://records.example.edu, https://second.example.edu',
+      }),
+    ).toThrow(/exactly one origin in production/);
+  });
+
   it('rejects an idle timeout that is not shorter than the absolute timeout', () => {
     expect(() =>
       loadAppConfig({

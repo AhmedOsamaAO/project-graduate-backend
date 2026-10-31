@@ -22,7 +22,7 @@ describe('isolated test harness', () => {
 
   afterAll(async () => {
     if (prisma) {
-      await prisma.onModuleDestroy();
+      await prisma.onApplicationShutdown();
     }
     if (environment) {
       await environment.close();

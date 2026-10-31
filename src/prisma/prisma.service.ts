@@ -2,7 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
-  OnModuleDestroy,
+  OnApplicationShutdown,
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -13,7 +13,7 @@ import { PrismaClient } from '../generated/prisma/client';
 @Injectable()
 export class PrismaService
   extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit, OnApplicationShutdown
 {
   private readonly logger = new Logger(PrismaService.name);
 
@@ -26,7 +26,12 @@ export class PrismaService
     this.logger.log('Connected to the database');
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /**
+   * Nest closes the HTTP server (draining in-flight requests) before it calls
+   * application-shutdown hooks, but runs module-destroy hooks first. Disconnect
+   * here so requests that are still running keep a working database.
+   */
+  async onApplicationShutdown(): Promise<void> {
     await this.$disconnect();
   }
 }
