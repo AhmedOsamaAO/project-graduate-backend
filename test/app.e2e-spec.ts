@@ -1,9 +1,8 @@
 import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
-import { PrismaService } from './../src/prisma/prisma.service';
+import { createApplication } from '../src/bootstrap';
+import { PrismaService } from '../src/prisma/prisma.service';
 import {
   createTestEnvironment,
   type TestEnvironment,
@@ -15,13 +14,7 @@ describe('AppController (e2e)', () => {
 
   beforeAll(async () => {
     environment = await createTestEnvironment();
-
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
+    app = (await createApplication()) as INestApplication<App>;
   });
 
   afterAll(async () => {
@@ -33,11 +26,11 @@ describe('AppController (e2e)', () => {
     }
   });
 
-  it('/ (GET)', () => {
+  it('/api/v1 (GET) returns the single-resource envelope', () => {
     return request(app.getHttpServer())
-      .get('/')
+      .get('/api/v1')
       .expect(200)
-      .expect('Hello World!');
+      .expect({ data: { message: 'Hello World!' } });
   });
 
   it('uses the disposable test database', async () => {

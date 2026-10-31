@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadAppConfig } from '../../src/config/app-config';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import {
   createTestEnvironment,
@@ -15,7 +16,7 @@ describe('isolated test harness', () => {
   beforeAll(async () => {
     environment = await createTestEnvironment();
 
-    prisma = new PrismaService();
+    prisma = new PrismaService(loadAppConfig());
     await prisma.onModuleInit();
   });
 
