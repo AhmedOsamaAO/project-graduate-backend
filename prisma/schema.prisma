@@ -10,3 +10,76 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum HistoryRecordType {
+  STAFF_USER
+
+  @@map("history_record_type")
+}
+
+enum HistoryAction {
+  ACCOUNT_PROVISIONED
+  PASSWORD_RESET
+  ACCOUNT_DEACTIVATED
+
+  @@map("history_action")
+}
+
+enum HistoryActorKind {
+  STAFF
+  OPERATOR
+  UNAUTHENTICATED
+
+  @@map("history_actor_kind")
+}
+
+model StaffUser {
+  id            Int             @id @default(autoincrement())
+  username      String          @unique @db.VarChar(100)
+  fullName      String          @map("full_name") @db.VarChar(200)
+  passwordHash  String          @map("password_hash")
+  deactivatedAt DateTime?       @map("deactivated_at") @db.Timestamptz(3)
+  authVersion   Int             @default(1) @map("auth_version")
+  version       Int             @default(1)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions      StaffSession[]
+  history       ChangeHistory[]
+
+  @@map("staff_user")
+}
+
+model StaffSession {
+  id                Int       @id @default(autoincrement())
+  staffUserId       Int       @map("staff_user_id")
+  credentialDigest  String    @unique @map("credential_digest") @db.Char(64)
+  authVersion       Int       @map("auth_version")
+  csrfSecret        String    @map("csrf_secret")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
+  staffUser         StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([staffUserId])
+  @@index([absoluteExpiresAt])
+  @@map("staff_session")
+}
+
+model ChangeHistory {
+  id                   Int               @id @default(autoincrement())
+  recordType           HistoryRecordType @map("record_type")
+  recordId             Int               @map("record_id")
+  action               HistoryAction
+  actorKind            HistoryActorKind  @map("actor_kind")
+  staffUserId          Int?              @map("staff_user_id")
+  operatorAttribution  String?           @map("operator_attribution") @db.VarChar(200)
+  occurredAt           DateTime          @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  before               Json?
+  after                Json?
+  operationCorrelation String?           @unique @map("operation_correlation") @db.VarChar(200)
+  staffUser            StaffUser?        @relation(fields: [staffUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([recordType, recordId, occurredAt, id])
+  @@index([staffUserId])
+  @@map("change_history")
+}

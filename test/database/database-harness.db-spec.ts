@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from 'pg';
 import { loadAppConfig } from '../../src/config/app-config';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import {
@@ -36,20 +37,24 @@ describe('isolated test harness', () => {
 
     expect(currentDatabase).toBe(environment.database.name);
 
-    const migrations = await prisma.$queryRaw<
-      Array<{ migrationName: string; finishedAt: Date | null }>
-    >`
+    const admin = new Client({ connectionString: environment.database.url });
+    await admin.connect();
+    const migrations = await admin
+      .query<{ migrationName: string; finishedAt: Date | null }>(
+        `
       SELECT migration_name AS "migrationName", finished_at AS "finishedAt"
       FROM "_prisma_migrations"
       ORDER BY started_at
-    `;
+    `,
+      )
+      .finally(() => admin.end());
 
-    expect(migrations.map((migration) => migration.migrationName)).toContain(
-      '20261031120000_baseline',
-    );
-    expect(migrations.every((migration) => migration.finishedAt !== null)).toBe(
-      true,
-    );
+    expect(
+      migrations.rows.map((migration) => migration.migrationName),
+    ).toContain('20261031120000_baseline');
+    expect(
+      migrations.rows.every((migration) => migration.finishedAt !== null),
+    ).toBe(true);
   });
 
   it('creates a writable temporary storage directory outside the repository', async () => {
