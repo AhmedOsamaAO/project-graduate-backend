@@ -240,7 +240,7 @@ describe('operator account commands', () => {
     }
   });
 
-  it('proves the actual runtime login cannot update, delete or truncate history', async () => {
+  it('proves the actual runtime login cannot update, delete or truncate history or delete staff accounts', async () => {
     const client = new Client({ connectionString: database.runtimeUrl });
     await client.connect();
     try {
@@ -252,6 +252,9 @@ describe('operator account commands', () => {
         "UPDATE change_history SET operator_attribution = 'forged'",
         'DELETE FROM change_history',
         'TRUNCATE change_history',
+        "SELECT setval('change_history_id_seq', 1)",
+        'DELETE FROM staff_user',
+        'TRUNCATE staff_user',
       ]) {
         await expect(client.query(sql)).rejects.toMatchObject({
           code: '42501',
@@ -348,6 +351,202 @@ describe('operator account commands', () => {
       await admin.end();
     }
     await expect(assertRuntimeRole(prisma)).resolves.toBeUndefined();
+  });
+
+  it('rejects session-user role masking, column/trigger/sequence over-grants and staff_user DELETE', async () => {
+    const admin = new Client({ connectionString: database.url });
+    await admin.connect();
+    const login = new URL(database.runtimeUrl).username;
+    const masked = `${login}_masked`;
+    const maskedPassword = randomBytes(16).toString('hex');
+    const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
+
+    const maskedUrl = new URL(database.runtimeUrl);
+    maskedUrl.username = masked;
+    maskedUrl.password = maskedPassword;
+    maskedUrl.searchParams.set('options', '-c role=graduate_runtime');
+    let maskedPrisma: PrismaClient | undefined;
+
+    try {
+      await admin.query(
+        `CREATE ROLE ${identifier(masked)} LOGIN PASSWORD '${maskedPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
+      );
+      await admin.query(`GRANT graduate_runtime TO ${identifier(masked)}`);
+      await admin.query(
+        `GRANT UPDATE ON change_history TO ${identifier(masked)}`,
+      );
+      maskedPrisma = new PrismaClient({
+        adapter: new PrismaPg({ connectionString: maskedUrl.toString() }),
+      });
+      const [ident] = await maskedPrisma.$queryRaw<
+        Array<{ cu: string; su: string }>
+      >`SELECT current_user::text AS cu, session_user::text AS su`;
+      expect(ident).toEqual({ cu: 'graduate_runtime', su: masked });
+      await expect(assertRuntimeRole(maskedPrisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+
+      await admin.query(
+        'GRANT UPDATE (operator_attribution) ON change_history TO graduate_runtime',
+      );
+      await expect(assertRuntimeRole(prisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+      await admin.query(
+        'REVOKE UPDATE (operator_attribution) ON change_history FROM graduate_runtime',
+      );
+
+      await admin.query('GRANT TRIGGER ON change_history TO graduate_runtime');
+      await expect(assertRuntimeRole(prisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+      await admin.query(
+        'REVOKE TRIGGER ON change_history FROM graduate_runtime',
+      );
+
+      await admin.query(
+        'REVOKE USAGE ON SEQUENCE change_history_id_seq FROM graduate_runtime',
+      );
+      await expect(assertRuntimeRole(prisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+      await admin.query(
+        'GRANT USAGE ON SEQUENCE change_history_id_seq TO graduate_runtime',
+      );
+
+      await admin.query(
+        'GRANT UPDATE ON SEQUENCE change_history_id_seq TO graduate_runtime',
+      );
+      await expect(assertRuntimeRole(prisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+      await admin.query(
+        'REVOKE UPDATE ON SEQUENCE change_history_id_seq FROM graduate_runtime',
+      );
+
+      await admin.query('GRANT DELETE ON staff_user TO graduate_runtime');
+      await expect(assertRuntimeRole(prisma)).rejects.toThrow(
+        'Runtime database role',
+      );
+      await admin.query('REVOKE DELETE ON staff_user FROM graduate_runtime');
+    } finally {
+      await maskedPrisma?.$disconnect().catch(() => undefined);
+      await admin
+        .query(
+          'REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON change_history FROM graduate_runtime',
+        )
+        .catch(() => undefined);
+      await admin
+        .query(
+          'REVOKE UPDATE ON SEQUENCE change_history_id_seq FROM graduate_runtime',
+        )
+        .catch(() => undefined);
+      await admin
+        .query(
+          'GRANT USAGE, SELECT ON SEQUENCE change_history_id_seq TO graduate_runtime',
+        )
+        .catch(() => undefined);
+      await admin
+        .query('REVOKE DELETE ON staff_user FROM graduate_runtime')
+        .catch(() => undefined);
+      await admin
+        .query(`REVOKE ALL ON change_history FROM ${identifier(masked)}`)
+        .catch(() => undefined);
+      await admin
+        .query(`REVOKE graduate_runtime FROM ${identifier(masked)}`)
+        .catch(() => undefined);
+      await admin
+        .query(`DROP OWNED BY ${identifier(masked)}`)
+        .catch(() => undefined);
+      await admin
+        .query(`DROP ROLE IF EXISTS ${identifier(masked)}`)
+        .catch(() => undefined);
+      await admin.end();
+    }
+    await expect(assertRuntimeRole(prisma)).resolves.toBeUndefined();
+  });
+
+  it('enforces nullable record_id only for UNAUTHENTICATED history and permits skewed lastSeenAt', async () => {
+    const staff = await accounts.provision(
+      { attribution: 'constraint operator' },
+      {
+        username: 'constraint.user',
+        fullName: 'Constraint User',
+        password: 'constraint test password',
+      },
+    );
+    const createdAt = new Date(Date.now() + 10_000);
+    const session = await prisma.staffSession.create({
+      data: {
+        staffUserId: staff.id,
+        authVersion: 1,
+        credentialDigest: randomBytes(32).toString('hex'),
+        csrfSecret: randomBytes(32).toString('hex'),
+        createdAt,
+        lastSeenAt: new Date(createdAt.getTime() - 20_000),
+        absoluteExpiresAt: new Date(createdAt.getTime() + 60_000),
+      },
+    });
+    await prisma.staffSession.delete({ where: { id: session.id } });
+
+    const client = new Client({ connectionString: database.runtimeUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query('SAVEPOINT bad_session_expiry');
+      await expect(
+        client.query(
+          `INSERT INTO staff_session (staff_user_id, credential_digest, auth_version, csrf_secret, created_at, last_seen_at, absolute_expires_at)
+           VALUES ($1, $2, 1, $3, $4, $4, $4)`,
+          [
+            staff.id,
+            randomBytes(32).toString('hex'),
+            randomBytes(32).toString('hex'),
+            createdAt,
+          ],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT bad_session_expiry');
+
+      await client.query('SAVEPOINT null_operator_record_id');
+      await expect(
+        client.query(
+          `INSERT INTO change_history (record_type, record_id, action, actor_kind, operator_attribution)
+           VALUES ('STAFF_USER', NULL, 'ACCOUNT_PROVISIONED', 'OPERATOR', 'op')`,
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT null_operator_record_id');
+
+      await client.query('SAVEPOINT zero_operator_record_id');
+      await expect(
+        client.query(
+          `INSERT INTO change_history (record_type, record_id, action, actor_kind, operator_attribution)
+           VALUES ('STAFF_USER', 0, 'ACCOUNT_PROVISIONED', 'OPERATOR', 'op')`,
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT zero_operator_record_id');
+
+      await client.query('SAVEPOINT null_staff_record_id');
+      await expect(
+        client.query(
+          `INSERT INTO change_history (record_type, record_id, action, actor_kind, staff_user_id)
+           VALUES ('STAFF_USER', NULL, 'ACCOUNT_PROVISIONED', 'STAFF', $1)`,
+          [staff.id],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT null_staff_record_id');
+
+      await expect(
+        client.query(
+          `INSERT INTO change_history (record_type, record_id, action, actor_kind)
+           VALUES ('STAFF_USER', NULL, 'ACCOUNT_PROVISIONED', 'UNAUTHENTICATED')`,
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await client.end();
+    }
   });
 
   it('runs the built CLI with stdin passwords, safe output and nonzero failures', async () => {

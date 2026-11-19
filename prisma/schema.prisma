@@ -68,7 +68,7 @@ model StaffSession {
 model ChangeHistory {
   id                   Int               @id @default(autoincrement())
   recordType           HistoryRecordType @map("record_type")
-  recordId             Int               @map("record_id")
+  recordId             Int?              @map("record_id")
   action               HistoryAction
   actorKind            HistoryActorKind  @map("actor_kind")
   staffUserId          Int?              @map("staff_user_id")

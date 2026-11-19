@@ -28,12 +28,19 @@ creation, replication, bypass-RLS, or membership in privileged roles.
    this login an owner or grant it other memberships. Grant `CONNECT` on the
    application database if your installation revokes the default PUBLIC access.
 3. Set `DATABASE_URL` to that login for both the service and account commands.
-   Keep `MIGRATION_DATABASE_URL` out of the service environment. Example variables
+   Connect directly as that runtime login rather than masking another login
+   with `SET ROLE` (`current_user` must match `session_user`). Keep
+   `MIGRATION_DATABASE_URL` out of the service environment. Example variables
    are in `.env.example`; store real configuration with restricted permissions.
 4. Build and start the application normally. Startup and commands reject unsafe
-   history privileges. The runtime group can SELECT/INSERT history, use its
-   sequence, and mutate accounts/sessions, but cannot UPDATE/DELETE/TRUNCATE
-   history, own it, or inherit its owner's rights. Migration credentials remain
+   history privileges. The migration assumes a dedicated application database
+   and revokes `CREATE` on schema `public` from `PUBLIC` (matching PostgreSQL
+   15+ defaults). The runtime group has `SELECT`/`INSERT` on `change_history`
+   (no table/column `UPDATE`, `DELETE`, `TRUNCATE`, or `TRIGGER`),
+   `USAGE`/`SELECT` on `change_history_id_seq` (no `UPDATE`/`setval`),
+   `SELECT`/`INSERT`/`UPDATE` on `staff_user` (no `DELETE`/`TRUNCATE`), and
+   `SELECT`/`INSERT`/`UPDATE`/`DELETE` on `staff_session`, and cannot own
+   those objects or inherit their owner's rights. Migration credentials remain
    trusted operator credentials and can alter schema/data: never share them with
    staff or the running service. Future migrations must explicitly grant only the
    privileges their new tables need; there are no broad default table grants.
@@ -54,7 +61,9 @@ After `npm run build`, create an account interactively:
 npm run staff -- create --operator 'Ahmed (office host)' --username office.user --full-name 'Office User'
 ```
 
-On a terminal, passwords are entered in a masked prompt with confirmation. For
+On a terminal, passwords are entered in a masked prompt with confirmation
+written to `stderr` (requiring a terminal on both `stdin` and `stderr`) so
+`stdout` stays clean `{ "data": ... }` JSON even when redirected or piped. For
 automation, pipe **one password line** from a protected secret source into the
 same command; a final LF/CRLF is removed, not password whitespace. No password
 option, positional password, environment-password variable, or password default

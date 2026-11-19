@@ -27,7 +27,7 @@ CREATE TABLE "staff_session" (
   "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "last_seen_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "absolute_expires_at" TIMESTAMPTZ(3) NOT NULL,
-  CONSTRAINT session_timestamps CHECK (last_seen_at >= created_at AND absolute_expires_at > created_at)
+  CONSTRAINT session_timestamps CHECK (absolute_expires_at > created_at)
 );
 CREATE INDEX staff_session_staff_user_id_idx ON staff_session(staff_user_id);
 CREATE INDEX staff_session_absolute_expires_at_idx ON staff_session(absolute_expires_at);
@@ -35,7 +35,7 @@ CREATE INDEX staff_session_absolute_expires_at_idx ON staff_session(absolute_exp
 CREATE TABLE "change_history" (
   "id" SERIAL PRIMARY KEY,
   "record_type" history_record_type NOT NULL,
-  "record_id" INTEGER NOT NULL CHECK (record_id > 0),
+  "record_id" INTEGER,
   "action" history_action NOT NULL,
   "actor_kind" history_actor_kind NOT NULL,
   "staff_user_id" INTEGER REFERENCES staff_user(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -44,9 +44,13 @@ CREATE TABLE "change_history" (
   "before" JSONB,
   "after" JSONB,
   "operation_correlation" VARCHAR(200) UNIQUE,
+  CONSTRAINT history_record_id CHECK (
+    (record_id IS NOT NULL AND record_id > 0) OR
+    (actor_kind = 'UNAUTHENTICATED' AND record_id IS NULL)
+  ),
   CONSTRAINT history_actor CHECK (
     (actor_kind = 'STAFF' AND staff_user_id IS NOT NULL AND operator_attribution IS NULL) OR
-    (actor_kind = 'OPERATOR' AND staff_user_id IS NULL AND length(btrim(operator_attribution)) > 0 AND operator_attribution IS NOT NULL) OR
+    (actor_kind = 'OPERATOR' AND staff_user_id IS NULL AND operator_attribution IS NOT NULL AND length(btrim(operator_attribution)) > 0) OR
     (actor_kind = 'UNAUTHENTICATED' AND staff_user_id IS NULL AND operator_attribution IS NULL)
   )
 );
@@ -68,7 +72,10 @@ BEGIN
 END $$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO graduate_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON staff_user, staff_session TO graduate_runtime;
+REVOKE ALL ON staff_user, staff_session FROM PUBLIC, graduate_runtime;
+GRANT SELECT, INSERT, UPDATE ON staff_user TO graduate_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON staff_session TO graduate_runtime;
 REVOKE ALL ON change_history FROM PUBLIC, graduate_runtime;
 GRANT SELECT, INSERT ON change_history TO graduate_runtime;
+REVOKE ALL ON SEQUENCE staff_user_id_seq, staff_session_id_seq, change_history_id_seq FROM PUBLIC, graduate_runtime;
 GRANT USAGE, SELECT ON SEQUENCE staff_user_id_seq, staff_session_id_seq, change_history_id_seq TO graduate_runtime;

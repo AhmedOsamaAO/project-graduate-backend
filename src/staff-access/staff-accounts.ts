@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import { argon2id, hash } from 'argon2';
 import { ApiError } from '../common/errors/api-error';
+import { ERROR_CODES } from '../common/errors/error-codes';
 import {
   appendAccountHistory,
   staffAccountView,
@@ -22,6 +23,10 @@ interface VersionedAccount {
   readonly id: number;
   readonly expectedVersion: number;
 }
+
+type AccountMutation =
+  | { readonly action: 'PASSWORD_RESET'; readonly passwordHash: string }
+  | { readonly action: 'ACCOUNT_DEACTIVATED' };
 
 /** Sole operator workflow writer; future HTTP access reuses the same account locks. */
 export class StaffAccounts {
@@ -65,7 +70,7 @@ export class StaffAccounts {
       ) {
         throw new ApiError(
           HttpStatus.CONFLICT,
-          'USERNAME_EXISTS',
+          ERROR_CODES.USERNAME_EXISTS,
           'Username already exists',
         );
       }
@@ -83,7 +88,7 @@ export class StaffAccounts {
     return this.mutate(
       actor,
       { id: input.id, expectedVersion: input.expectedVersion },
-      passwordHash,
+      { action: 'PASSWORD_RESET', passwordHash },
     );
   }
 
@@ -93,13 +98,17 @@ export class StaffAccounts {
   ): Promise<StaffAccountView> {
     actor = validateActor(actor);
     validateVersion(input);
-    return this.mutate(actor, { ...input });
+    return this.mutate(
+      actor,
+      { id: input.id, expectedVersion: input.expectedVersion },
+      { action: 'ACCOUNT_DEACTIVATED' },
+    );
   }
 
   private async mutate(
     actor: OperatorActor,
     input: VersionedAccount,
-    passwordHash?: string,
+    mutation: AccountMutation,
   ): Promise<StaffAccountView> {
     return this.transactions.run(input, async (tx, original) => {
       // Login/password-change must take this same lock before their version recheck.
@@ -110,41 +119,35 @@ export class StaffAccounts {
       if (!before)
         throw new ApiError(
           HttpStatus.NOT_FOUND,
-          'NOT_FOUND',
+          ERROR_CODES.NOT_FOUND,
           'Staff account not found',
         );
       if (before.version !== original.expectedVersion) {
         throw new ApiError(
           HttpStatus.CONFLICT,
-          'STALE_VERSION',
+          ERROR_CODES.STALE_VERSION,
           'Staff account has changed',
         );
       }
       if (before.deactivatedAt) {
         throw new ApiError(
           HttpStatus.CONFLICT,
-          'ACCOUNT_DEACTIVATED',
+          ERROR_CODES.ACCOUNT_DEACTIVATED,
           'Staff account is deactivated',
         );
       }
       const after = await tx.staffUser.update({
         where: { id: original.id },
         data: {
-          ...(passwordHash === undefined
-            ? { deactivatedAt: new Date() }
-            : { passwordHash }),
+          ...(mutation.action === 'PASSWORD_RESET'
+            ? { passwordHash: mutation.passwordHash }
+            : { deactivatedAt: new Date() }),
           authVersion: { increment: 1 },
           version: { increment: 1 },
         },
       });
       await tx.staffSession.deleteMany({ where: { staffUserId: after.id } });
-      await appendAccountHistory(
-        tx,
-        actor,
-        passwordHash === undefined ? 'ACCOUNT_DEACTIVATED' : 'PASSWORD_RESET',
-        before,
-        after,
-      );
+      await appendAccountHistory(tx, actor, mutation.action, before, after);
       return staffAccountView(after);
     });
   }
@@ -200,5 +203,9 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 function invalid(message: string): never {
-  throw new ApiError(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', message);
+  throw new ApiError(
+    HttpStatus.BAD_REQUEST,
+    ERROR_CODES.VALIDATION_ERROR,
+    message,
+  );
 }

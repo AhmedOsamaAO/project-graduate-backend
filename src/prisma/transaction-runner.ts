@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
+import { ERROR_CODES } from '../common/errors/error-codes';
 import type { Prisma } from '../generated/prisma/client';
 
 export interface TransactionHost {
@@ -17,17 +18,19 @@ export class TransactionRunner {
     input: I,
     work: (tx: Prisma.TransactionClient, input: I) => Promise<T>,
   ): Promise<T> {
+    const snapshot = structuredClone(input);
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.database.$transaction((tx) => work(tx, input), {
-          isolationLevel: 'Serializable',
-        });
+        return await this.database.$transaction(
+          (tx) => work(tx, structuredClone(snapshot)),
+          { isolationLevel: 'Serializable' },
+        );
       } catch (error) {
         if (!retryable(error)) throw error;
         if (attempt === 3) {
           throw new ApiError(
             HttpStatus.CONFLICT,
-            'RETRYABLE_CONFLICT',
+            ERROR_CODES.RETRYABLE_CONFLICT,
             'Concurrent changes prevented this operation; retry with the original version',
           );
         }
