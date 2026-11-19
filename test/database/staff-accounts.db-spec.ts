@@ -3,9 +3,11 @@ import { verify } from 'argon2';
 import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
 import { spawn } from 'node:child_process';
+import { ERROR_CODES } from '../../src/common/errors/error-codes';
 import { PrismaClient } from '../../src/generated/prisma/client';
-import { StaffAccounts } from '../../src/staff-access/staff-accounts';
 import { assertRuntimeRole } from '../../src/prisma/runtime-role';
+import { TransactionRunner } from '../../src/prisma/transaction-runner';
+import { StaffAccounts } from '../../src/staff-access/staff-accounts';
 import {
   createTestDatabase,
   type TestDatabase,
@@ -174,6 +176,145 @@ describe('operator account commands', () => {
     ).toBe(2);
   });
 
+  it('allows only one of competing resetPassword and deactivate commands to commit', async () => {
+    const staff = await accounts.provision(
+      { attribution: 'race operator' },
+      {
+        username: 'race.reset.user',
+        fullName: 'Race Reset User',
+        password: 'individual race password',
+      },
+    );
+    const results = await Promise.allSettled([
+      accounts.resetPassword(
+        { attribution: 'race reset' },
+        {
+          id: staff.id,
+          expectedVersion: 1,
+          password: 'replacement race password',
+        },
+      ),
+      accounts.deactivate(
+        { attribution: 'race deactivate' },
+        { id: staff.id, expectedVersion: 1 },
+      ),
+    ]);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.find((result) => result.status === 'rejected'),
+    ).toMatchObject({ reason: { code: ERROR_CODES.STALE_VERSION } });
+
+    const stored = await prisma.staffUser.findUniqueOrThrow({
+      where: { id: staff.id },
+    });
+    const history = await prisma.changeHistory.findMany({
+      where: { recordId: staff.id },
+      orderBy: { id: 'asc' },
+    });
+    expect(stored.version).toBe(2);
+    expect(stored.authVersion).toBe(2);
+    expect(history).toHaveLength(2);
+    if (history[1].action === 'PASSWORD_RESET') {
+      expect(stored.deactivatedAt).toBeNull();
+    } else {
+      expect(history[1].action).toBe('ACCOUNT_DEACTIVATED');
+      expect(stored.deactivatedAt).toEqual(expect.any(Date));
+    }
+  });
+
+  it('retries real PostgreSQL commit-time SSI 40001 conflicts and returns RETRYABLE_CONFLICT on exhaustion', async () => {
+    const staff = await accounts.provision(
+      { attribution: 'ssi operator' },
+      {
+        username: 'ssi.user',
+        fullName: 'SSI User',
+        password: 'ssi unique test password',
+      },
+    );
+    const addSession = () =>
+      prisma.staffSession.create({
+        data: {
+          staffUserId: staff.id,
+          authVersion: 1,
+          credentialDigest: randomBytes(32).toString('hex'),
+          csrfSecret: randomBytes(32).toString('hex'),
+          absoluteExpiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+    const s1 = await addSession();
+    const s2 = await addSession();
+    const opponent = new Client({ connectionString: database.runtimeUrl });
+    await opponent.connect();
+
+    const triggerCommitTimeSsi = async (): Promise<void> => {
+      await opponent.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await opponent.query('SELECT id FROM staff_session WHERE id = $1', [
+        s1.id,
+      ]);
+    };
+
+    const finishOpponentWriteSkew = async (): Promise<void> => {
+      await opponent.query(
+        "UPDATE staff_session SET last_seen_at = last_seen_at + interval '1 second' WHERE id = $1",
+        [s2.id],
+      );
+      await opponent.query('COMMIT');
+    };
+
+    const runner = new TransactionRunner(prisma);
+    try {
+      const recoveredVersions: number[] = [];
+      let attempt = 0;
+      const result = await runner.run(
+        { expectedVersion: 5 },
+        async (tx, input) => {
+          attempt += 1;
+          recoveredVersions.push(input.expectedVersion);
+          await tx.staffSession.findUniqueOrThrow({ where: { id: s2.id } });
+          if (attempt === 1) {
+            await triggerCommitTimeSsi();
+            await tx.staffSession.update({
+              where: { id: s1.id },
+              data: { lastSeenAt: new Date(Date.now() + 1_000) },
+            });
+            await finishOpponentWriteSkew();
+          } else {
+            await tx.staffSession.update({
+              where: { id: s1.id },
+              data: { lastSeenAt: new Date(Date.now() + 2_000) },
+            });
+          }
+          return 'ssi-recovered';
+        },
+      );
+      expect(result).toBe('ssi-recovered');
+      expect(recoveredVersions).toEqual([5, 5]);
+
+      const exhaustedVersions: number[] = [];
+      await expect(
+        runner.run({ expectedVersion: 9 }, async (tx, input) => {
+          exhaustedVersions.push(input.expectedVersion);
+          await tx.staffSession.findUniqueOrThrow({ where: { id: s2.id } });
+          await triggerCommitTimeSsi();
+          await tx.staffSession.update({
+            where: { id: s1.id },
+            data: { lastSeenAt: new Date(Date.now() + 3_000) },
+          });
+          await finishOpponentWriteSkew();
+        }),
+      ).rejects.toMatchObject({ code: ERROR_CODES.RETRYABLE_CONFLICT });
+      expect(exhaustedVersions).toEqual([9, 9, 9]);
+    } finally {
+      await opponent.query('ROLLBACK').catch(() => undefined);
+      await opponent.end().catch(() => undefined);
+      await prisma.staffSession
+        .deleteMany({ where: { id: { in: [s1.id, s2.id] } } })
+        .catch(() => undefined);
+    }
+  });
+
   it('rejects duplicate canonical usernames even when provisioned concurrently', async () => {
     const input = {
       username: 'Unique.User',
@@ -308,46 +449,46 @@ describe('operator account commands', () => {
     await admin.connect();
     const login = new URL(database.runtimeUrl).username;
     const extra = `${login}_extra`;
-    // These identifiers are generated by the test harness, not command input.
-    const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
     const owner = await admin.query<{ current_user: string }>(
       'SELECT current_user',
     );
     try {
-      await admin.query(`CREATE ROLE ${identifier(extra)} NOLOGIN`);
+      await admin.query(`CREATE ROLE ${quoteIdentifier(extra)} NOLOGIN`);
       await admin.query(
-        `GRANT UPDATE ON change_history TO ${identifier(extra)}`,
+        `GRANT UPDATE ON change_history TO ${quoteIdentifier(extra)}`,
       );
       await admin.query(
-        `GRANT ${identifier(extra)} TO ${identifier(login)} WITH INHERIT FALSE, SET TRUE`,
+        `GRANT ${quoteIdentifier(extra)} TO ${quoteIdentifier(login)} WITH INHERIT FALSE, SET TRUE`,
       );
       await expect(assertRuntimeRole(prisma)).rejects.toThrow(
         'Runtime database role',
       );
       await admin.query(
-        `REVOKE ${identifier(extra)} FROM ${identifier(login)}`,
+        `REVOKE ${quoteIdentifier(extra)} FROM ${quoteIdentifier(login)}`,
       );
-      await admin.query(`ALTER SCHEMA public OWNER TO ${identifier(login)}`);
+      await admin.query(
+        `ALTER SCHEMA public OWNER TO ${quoteIdentifier(login)}`,
+      );
       await expect(assertRuntimeRole(prisma)).rejects.toThrow(
         'Runtime database role',
       );
       await admin.query(`ALTER SCHEMA public OWNER TO pg_database_owner`);
       await admin.query(
-        `ALTER DATABASE ${identifier(database.name)} OWNER TO ${identifier(login)}`,
+        `ALTER DATABASE ${quoteIdentifier(database.name)} OWNER TO ${quoteIdentifier(login)}`,
       );
       await expect(assertRuntimeRole(prisma)).rejects.toThrow(
         'Runtime database role',
       );
     } finally {
       await admin.query(
-        `ALTER DATABASE ${identifier(database.name)} OWNER TO ${identifier(owner.rows[0].current_user)}`,
+        `ALTER DATABASE ${quoteIdentifier(database.name)} OWNER TO ${quoteIdentifier(owner.rows[0].current_user)}`,
       );
       await admin.query('ALTER SCHEMA public OWNER TO pg_database_owner');
       await admin.query(
-        `REVOKE ${identifier(extra)} FROM ${identifier(login)}`,
+        `REVOKE ${quoteIdentifier(extra)} FROM ${quoteIdentifier(login)}`,
       );
-      await admin.query(`DROP OWNED BY ${identifier(extra)}`);
-      await admin.query(`DROP ROLE ${identifier(extra)}`);
+      await admin.query(`DROP OWNED BY ${quoteIdentifier(extra)}`);
+      await admin.query(`DROP ROLE ${quoteIdentifier(extra)}`);
       await admin.end();
     }
     await expect(assertRuntimeRole(prisma)).resolves.toBeUndefined();
@@ -359,7 +500,6 @@ describe('operator account commands', () => {
     const login = new URL(database.runtimeUrl).username;
     const masked = `${login}_masked`;
     const maskedPassword = randomBytes(16).toString('hex');
-    const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
 
     const maskedUrl = new URL(database.runtimeUrl);
     maskedUrl.username = masked;
@@ -369,11 +509,11 @@ describe('operator account commands', () => {
 
     try {
       await admin.query(
-        `CREATE ROLE ${identifier(masked)} LOGIN PASSWORD '${maskedPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
+        `CREATE ROLE ${quoteIdentifier(masked)} LOGIN PASSWORD '${maskedPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
       );
-      await admin.query(`GRANT graduate_runtime TO ${identifier(masked)}`);
+      await admin.query(`GRANT graduate_runtime TO ${quoteIdentifier(masked)}`);
       await admin.query(
-        `GRANT UPDATE ON change_history TO ${identifier(masked)}`,
+        `GRANT UPDATE ON change_history TO ${quoteIdentifier(masked)}`,
       );
       maskedPrisma = new PrismaClient({
         adapter: new PrismaPg({ connectionString: maskedUrl.toString() }),
@@ -450,16 +590,16 @@ describe('operator account commands', () => {
         .query('REVOKE DELETE ON staff_user FROM graduate_runtime')
         .catch(() => undefined);
       await admin
-        .query(`REVOKE ALL ON change_history FROM ${identifier(masked)}`)
+        .query(`REVOKE ALL ON change_history FROM ${quoteIdentifier(masked)}`)
         .catch(() => undefined);
       await admin
-        .query(`REVOKE graduate_runtime FROM ${identifier(masked)}`)
+        .query(`REVOKE graduate_runtime FROM ${quoteIdentifier(masked)}`)
         .catch(() => undefined);
       await admin
-        .query(`DROP OWNED BY ${identifier(masked)}`)
+        .query(`DROP OWNED BY ${quoteIdentifier(masked)}`)
         .catch(() => undefined);
       await admin
-        .query(`DROP ROLE IF EXISTS ${identifier(masked)}`)
+        .query(`DROP ROLE IF EXISTS ${quoteIdentifier(masked)}`)
         .catch(() => undefined);
       await admin.end();
     }
@@ -681,4 +821,9 @@ function child(
     process.once('close', (code) => resolve({ code, stdout, stderr }));
     process.stdin.end(input);
   });
+}
+
+// These identifiers are generated by the test harness, not command input.
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }

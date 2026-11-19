@@ -10,6 +10,8 @@ type AccountCommands = Pick<
   'provision' | 'resetPassword' | 'deactivate'
 >;
 
+const MAX_PASSWORD_STDIN_BYTES = 1024 + 2; // 1024 UTF-8 bytes plus optional CRLF
+
 export type PasswordPrompt = (
   config: { message: string; mask?: boolean | string },
   context?: { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream },
@@ -60,7 +62,7 @@ export async function readPasswordInput(
         ? Buffer.from(chunk, 'utf8')
         : Buffer.from(chunk as Uint8Array);
     size += buffer.length;
-    if (size > 1026) {
+    if (size > MAX_PASSWORD_STDIN_BYTES) {
       throw new ApiError(
         HttpStatus.BAD_REQUEST,
         ERROR_CODES.VALIDATION_ERROR,

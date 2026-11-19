@@ -75,14 +75,61 @@ describe('serializable transaction runner', () => {
     ]);
   });
 
+  it('retries a direct DriverAdapterError TransactionWriteConflict without code or meta', async () => {
+    const versions: number[] = [];
+    let attempt = 0;
+    const transaction = jest.fn(
+      async (work: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+        attempt += 1;
+        const result = await work({} as Prisma.TransactionClient);
+        if (attempt === 1) {
+          throw Object.assign(new Error('Transaction write conflict'), {
+            name: 'DriverAdapterError',
+            cause: {
+              kind: 'TransactionWriteConflict',
+              originalCode: '40001',
+            },
+          });
+        }
+        return result;
+      },
+    );
+    const runner = new TransactionRunner({
+      $transaction: transaction as unknown as TransactionHost['$transaction'],
+    });
+
+    await expect(
+      runner.run({ expectedVersion: 11 }, (_tx, input) => {
+        versions.push(input.expectedVersion);
+        return Promise.resolve('committed');
+      }),
+    ).resolves.toBe('committed');
+    expect(versions).toEqual([11, 11]);
+    expect(transaction).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ['P2034', { code: 'P2034' }],
     ['40001', { code: '40001' }],
     ['40P01', { code: '40P01' }],
     ['nested meta.code 40001', { meta: { code: '40001' } }],
     [
-      'driverAdapterError originalCode 40P01',
+      'nested driverAdapterError originalCode 40P01',
       { meta: { driverAdapterError: { cause: { originalCode: '40P01' } } } },
+    ],
+    [
+      'direct DriverAdapterError 40001',
+      {
+        name: 'DriverAdapterError',
+        cause: { kind: 'TransactionWriteConflict', originalCode: '40001' },
+      },
+    ],
+    [
+      'direct DriverAdapterError 40P01',
+      {
+        name: 'DriverAdapterError',
+        cause: { kind: 'TransactionWriteConflict', originalCode: '40P01' },
+      },
     ],
   ])('stops after three total attempts for %s', async (_label, failure) => {
     const versions: number[] = [];

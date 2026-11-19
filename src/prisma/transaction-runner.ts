@@ -39,21 +39,35 @@ export class TransactionRunner {
   }
 }
 
+const RETRYABLE_SQLSTATES = new Set(['40001', '40P01']);
+
+interface AdapterErrorCause {
+  readonly kind?: string;
+  readonly code?: string;
+  readonly originalCode?: string;
+}
+
 function retryable(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const value = error as {
     code?: string;
+    cause?: AdapterErrorCause;
     meta?: {
       code?: string;
-      driverAdapterError?: { cause?: { originalCode?: string } };
+      driverAdapterError?: { cause?: AdapterErrorCause };
     };
   };
   return (
     value.code === 'P2034' ||
-    ['40001', '40P01'].includes(value.code ?? '') ||
-    ['40001', '40P01'].includes(value.meta?.code ?? '') ||
-    ['40001', '40P01'].includes(
-      value.meta?.driverAdapterError?.cause?.originalCode ?? '',
-    )
+    value.cause?.kind === 'TransactionWriteConflict' ||
+    value.meta?.driverAdapterError?.cause?.kind ===
+      'TransactionWriteConflict' ||
+    [
+      value.code,
+      value.cause?.originalCode,
+      value.cause?.code,
+      value.meta?.code,
+      value.meta?.driverAdapterError?.cause?.originalCode,
+    ].some((code) => code !== undefined && RETRYABLE_SQLSTATES.has(code))
   );
 }
