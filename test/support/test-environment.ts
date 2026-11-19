@@ -17,7 +17,7 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
   const previousDatabaseUrl = process.env.DATABASE_URL;
   const previousStorageRoot = process.env.PRIVATE_STORAGE_ROOT;
 
-  process.env.DATABASE_URL = database.url;
+  process.env.DATABASE_URL = database.runtimeUrl;
   process.env.PRIVATE_STORAGE_ROOT = storage.path;
 
   let closed = false;

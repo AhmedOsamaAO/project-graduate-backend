@@ -1,113 +1,131 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
     "ask-matt": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/ask-matt/SKILL.md",
-      "computedHash": "d1c5b4151720e96135154bd593ac4986a1030a2bc81e2aaf129f8b11224af9a9"
+      "computedHash": "7ff2383b40fe9d8f3e753d267d964fb2b44d120a948fd2a57c3b26ddfc318370"
     },
     "code-review": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/code-review/SKILL.md",
-      "computedHash": "57cfd4ceb011f05e58a1a4f4cad3b2e03419d371f8990f4bcb32ff0d435a039f"
+      "computedHash": "01451680bee1eec827067cff76ef6c64541bbfe08646e87fcd8f08d47e643e10"
+    },
+    "codebase-design": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/codebase-design/SKILL.md",
+      "computedHash": "d40f025dc1b0f2020663260f38f2bcb8d6ed3523afb11e5fda624b01238677e8"
     },
     "grill-me": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/productivity/grill-me/SKILL.md",
-      "computedHash": "9cdbb4b8f7a3aeaef82e6230c9e823500d4a8a1214c726cf342cf9829d34fc7d"
+      "computedHash": "ab1acb9fbd9eaee03da254abb8a8de228d1e7a07475fe959da4a5eefa34ea4b9"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/grill-with-docs/SKILL.md",
-      "computedHash": "35e62aa423aaeab6a414bcac273f56dfb17802ef2334b41b6a3b00f28196c8cf"
+      "computedHash": "02e258f41d210f9b2e7cce9faf62b3c59e8fcebe5d2736369c3cd07d471324f8"
     },
     "grilling": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/productivity/grilling/SKILL.md",
-      "computedHash": "ef1641a2047b71b60f1942cd35efb47d3afc9d584dff5a0b01f8c7db923aaa08"
+      "computedHash": "74de5501c2b0cec8410bf4ebc9eaddc84f6f7706e04d2c70a814872b1c44e410"
     },
     "handoff": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/productivity/handoff/SKILL.md",
-      "computedHash": "8ebcf017c0a59681f3c2f1ebf90e32f481954a068181a75151c44aa2c55de4b4"
+      "computedHash": "f60a2c3688379b7a306b3a7b8dd4120eab39da44c74fa2cb62d6424935f04aa7"
+    },
+    "implement": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/implement/SKILL.md",
+      "computedHash": "560465496ad0669329993bfdd0604e5c93b5c2446309a76f486040010b063908"
     },
     "prisma-cli": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-cli/SKILL.md",
-      "computedHash": "aaec1e0169bb8ae74b0e3c4b39a4ed00cef79741df42fb9c93771736fccf378f"
+      "computedHash": "5867232acad55272d7278be9144b2cb8dcadd500d5a60a89260a2332bf70bd62"
     },
     "prisma-client-api": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-client-api/SKILL.md",
-      "computedHash": "cbbabff961c8e16b2d59f8c1ffb4e7e20be52154e778ab95121e0211d6d09969"
+      "computedHash": "a4810158b4b436a69e782e6fab95a0ed5e5e0b2786c2ed00322051d29c4c2b64"
     },
     "prisma-compute": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-compute/SKILL.md",
-      "computedHash": "cc1648c5ef56e63a352bcf6b3d6caad44890d4fbe553c83dda9596d6178e9e22"
+      "computedHash": "b67b1427e53d25d0ca6e2526e2f6c31abf6069fbd22a6ac39c074ec9af372a4e"
     },
     "prisma-database-setup": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-database-setup/SKILL.md",
-      "computedHash": "0e11bb75ddfba8c6ee3dd776742699f7fe993d530497273232f1ffac80025e15"
+      "computedHash": "79848d903a92d69c3ee173fe26e565381b7b8a2ca66f82da156093e981087ce5"
     },
     "prisma-driver-adapter-implementation": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-driver-adapter-implementation/SKILL.md",
-      "computedHash": "cc487f1bf36f616ddb3a9478b3527d288dd706d77a9e5dbee9af52dca1eee8e4"
+      "computedHash": "6786760df68cf983505e8ea085c2ffa5253a0aa70c7b9ed72031d5f106d7d44f"
     },
     "prisma-mongodb-upgrade": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-mongodb-upgrade/SKILL.md",
-      "computedHash": "7496b8a66a2ed10cf5a530c838edeadf299f1ba16baa7513910bdc7264b4648f"
+      "computedHash": "fbe1fb6c9acd7c50aa8cff222bde8da99dbe74016ecf7c7baecc116c6ed02b24"
     },
     "prisma-orm-setup": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-orm-setup/SKILL.md",
-      "computedHash": "08c8bc188c5a304f549aea607320905c9edc0485692182bf590a56dfc71617ca"
+      "computedHash": "a688cf20e8b7b92a97425d2f7f6e071a410f124d6e9f90a3fc7f5e0973e883df"
     },
     "prisma-postgres": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-postgres/SKILL.md",
-      "computedHash": "d1622693b450df943ad90194efd2e95637d73aec0edf7e03b1ad17648d29c93b"
+      "computedHash": "bc15ea262db09a5372b2308d08d553d1437398b8eaf282d6c811db9b22524d85"
     },
     "prisma-postgres-setup": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-postgres-setup/SKILL.md",
-      "computedHash": "db538316e4731435eaf259dbc51ebc3766442fa2a5e07c238918e7fb92d9bb93"
+      "computedHash": "01568904f3a6eaa660c32db65009bb98fcfe99aae2aa3807f6aabf8863cb2429"
     },
     "prisma-upgrade-v7": {
       "source": "prisma/skills",
       "sourceType": "github",
       "skillPath": "prisma-upgrade-v7/SKILL.md",
-      "computedHash": "9a65f02d4ae2f3d1e81efb6be888f33a083b1c06d866ff5f762cc30786e4c8ce"
+      "computedHash": "f6e8519788f89e6ee404091eba28236af67551e450f100c9595b208d840770d9"
+    },
+    "tdd": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/tdd/SKILL.md",
+      "computedHash": "e3e0f78ff1c2d52ffefa0378baa1e80e129d359288cf9a56f4e59afcd2aac86c"
     },
     "to-tickets": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/to-tickets/SKILL.md",
-      "computedHash": "5f871bdc46a9212222214ba399be4965374208af1bd7f48f1271bef72841dd31"
+      "computedHash": "17496514c92954f68eacdf2b1221e2ddb39fa231b83f03c70bc7d4422f704b2d"
     },
     "wayfinder": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/wayfinder/SKILL.md",
-      "computedHash": "71d1296ae9f1ea0397f385f72d11ca3473827f5d067df4d06c58eb03377a57ce"
+      "computedHash": "a0aee2945105bc5f682588388b2c33d5cc8a68f68f10a60ece3f725e73076136"
     }
   }
 }

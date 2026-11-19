@@ -9,6 +9,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/app-config.module';
 import { PrismaClient } from '../generated/prisma/client';
+import { assertRuntimeRole } from './runtime-role';
 
 @Injectable()
 export class PrismaService
@@ -23,6 +24,7 @@ export class PrismaService
 
   async onModuleInit(): Promise<void> {
     await this.$queryRaw`SELECT 1`;
+    await assertRuntimeRole(this);
     this.logger.log('Connected to the database');
   }
 

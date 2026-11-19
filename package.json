@@ -18,6 +18,7 @@
     "prisma:migrate": "prisma migrate dev --config prisma7.config.ts",
     "prisma:deploy": "prisma migrate deploy --config prisma7.config.ts",
     "prisma:studio": "prisma studio --config prisma7.config.ts",
+    "staff": "node dist/staff-access/operator-main.js",
     "start": "NODE_ENV=${NODE_ENV:-development} nest start",
     "start:dev": "NODE_ENV=${NODE_ENV:-development} nest start --watch",
     "start:debug": "NODE_ENV=${NODE_ENV:-development} nest start --debug --watch",
@@ -33,12 +34,14 @@
     "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
+    "@inquirer/prompts": "^7.10.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.4.7",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "argon2": "^0.45.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.4",
     "dotenv": "^18.0.8",

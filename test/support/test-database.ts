@@ -10,6 +10,7 @@ const PROJECT_ROOT = join(__dirname, '..', '..');
 export interface TestDatabase {
   readonly name: string;
   readonly url: string;
+  readonly runtimeUrl: string;
   drop(): Promise<void>;
 }
 
@@ -28,10 +29,27 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     client.query(`CREATE DATABASE ${quoteIdentifier(name)}`),
   );
 
+  const runtimeRole = `${name}_app`;
+  const runtimePassword = randomBytes(24).toString('hex');
+  let roleCreated = false;
   try {
     await migrate(databaseUrl(adminUrl, name));
+    await withAdminClient(databaseUrl(adminUrl, name), async (client) => {
+      await client.query(
+        `CREATE ROLE ${quoteIdentifier(runtimeRole)} LOGIN PASSWORD '${runtimePassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+      );
+      roleCreated = true;
+      await client.query(
+        `GRANT graduate_runtime TO ${quoteIdentifier(runtimeRole)}`,
+      );
+    });
   } catch (error) {
     await dropTestDatabase(adminUrl, name).catch(() => undefined);
+    if (roleCreated) {
+      await withAdminClient(adminUrl, (client) =>
+        client.query(`DROP ROLE ${quoteIdentifier(runtimeRole)}`),
+      ).catch(() => undefined);
+    }
     throw error;
   }
 
@@ -39,14 +57,41 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   return {
     name,
     url: databaseUrl(adminUrl, name),
+    runtimeUrl: runtimeDatabaseUrl(
+      adminUrl,
+      name,
+      runtimeRole,
+      runtimePassword,
+    ),
     async drop(): Promise<void> {
       if (dropped) {
         return;
       }
       dropped = true;
       await dropTestDatabase(adminUrl, name);
+      await withAdminClient(adminUrl, (client) =>
+        client.query(`DROP ROLE ${quoteIdentifier(runtimeRole)}`),
+      );
     },
   };
+}
+
+function runtimeDatabaseUrl(
+  serverUrl: string,
+  name: string,
+  role: string,
+  password: string,
+): string {
+  const url = new URL(databaseUrl(serverUrl, name));
+  url.username = role;
+  url.password = password;
+  // Local operator connections may use peer-authenticated Unix sockets.
+  // Restricted LOGINs must instead exercise actual password authentication.
+  if (url.searchParams.get('host')?.startsWith('/')) {
+    url.searchParams.delete('host');
+    url.hostname = 'localhost';
+  }
+  return url.toString();
 }
 
 function testServerUrl(): string {
@@ -108,7 +153,7 @@ async function migrate(databaseUrlValue: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(NPM_COMMAND, ['run', 'prisma:deploy', '--silent'], {
       cwd: PROJECT_ROOT,
-      env: { ...process.env, DATABASE_URL: databaseUrlValue },
+      env: { ...process.env, MIGRATION_DATABASE_URL: databaseUrlValue },
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
     });
