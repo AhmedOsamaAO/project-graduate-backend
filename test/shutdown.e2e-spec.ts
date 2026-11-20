@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApplication } from '../src/bootstrap';
 import { loadAppConfig } from '../src/config/app-config';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { provisionAndLogin, type SignedInStaff } from './support/auth-helper';
 import {
   createTestEnvironment,
   type TestEnvironment,
@@ -46,6 +47,7 @@ class SlowProbeController {
 function get(
   port: number,
   path: string,
+  cookie?: string,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(
@@ -54,7 +56,10 @@ function get(
         port,
         path,
         agent: false,
-        headers: { connection: 'close' },
+        headers: {
+          connection: 'close',
+          ...(cookie ? { cookie } : {}),
+        },
       },
       (incoming) => {
         const chunks: Buffer[] = [];
@@ -100,6 +105,7 @@ async function waitUntilRefusingConnections(port: number): Promise<void> {
 describe('graceful shutdown (e2e)', () => {
   let app: INestApplication<Server>;
   let environment: TestEnvironment;
+  let staff: SignedInStaff;
   let closed = false;
 
   beforeAll(async () => {
@@ -114,6 +120,7 @@ describe('graceful shutdown (e2e)', () => {
     app = moduleFixture.createNestApplication();
     configureApplication(app, config);
     await app.init();
+    staff = await provisionAndLogin(app, { username: 'shutdown.e2e.staff' });
   });
 
   afterAll(async () => {
@@ -143,7 +150,7 @@ describe('graceful shutdown (e2e)', () => {
       await disconnect();
     });
 
-    const inFlight = get(port, '/api/v1/__probe/slow');
+    const inFlight = get(port, '/api/v1/__probe/slow', staff.sessionCookie);
     await requestStarted.promise;
 
     const closing = app.close();

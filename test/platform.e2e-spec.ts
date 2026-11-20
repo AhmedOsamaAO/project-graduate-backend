@@ -21,6 +21,7 @@ import type { ErrorEnvelope } from '../src/common/errors/error-codes';
 import { createPage, type PageResult } from '../src/common/http/page';
 import { PageQueryDto } from '../src/common/http/page-query.dto';
 import { loadAppConfig } from '../src/config/app-config';
+import { provisionAndLogin, type SignedInStaff } from './support/auth-helper';
 import {
   createTestEnvironment,
   type TestEnvironment,
@@ -110,6 +111,7 @@ class ProbeController {
 describe('platform foundation (e2e)', () => {
   let app: INestApplication<App>;
   let environment: TestEnvironment;
+  let staff: SignedInStaff;
 
   beforeAll(async () => {
     environment = await createTestEnvironment();
@@ -123,6 +125,7 @@ describe('platform foundation (e2e)', () => {
     app = moduleFixture.createNestApplication();
     configureApplication(app, config);
     await app.init();
+    staff = await provisionAndLogin(app, { username: 'platform.e2e.staff' });
   });
 
   afterAll(async () => {
@@ -137,6 +140,7 @@ describe('platform foundation (e2e)', () => {
   it('wraps single resources in the data envelope', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
 
     expect(response.body).toEqual({ data: { message: 'Hello World!' } });
@@ -145,6 +149,7 @@ describe('platform foundation (e2e)', () => {
   it('returns the page envelope unchanged', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/__probe/page')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
     const body = response.body as PageResult<unknown>;
 
@@ -159,6 +164,7 @@ describe('platform foundation (e2e)', () => {
   it('applies the default page size and rejects values over the maximum', async () => {
     const defaults = await request(app.getHttpServer())
       .get('/api/v1/__probe/page-query')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
     const defaultBody = defaults.body as { data: PageQueryDto };
 
@@ -166,20 +172,24 @@ describe('platform foundation (e2e)', () => {
 
     await request(app.getHttpServer())
       .get('/api/v1/__probe/page-query?page=2&pageSize=100')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
 
     await request(app.getHttpServer())
       .get('/api/v1/__probe/page-query?pageSize=101')
+      .set('Cookie', staff.sessionCookie)
       .expect(400);
 
     await request(app.getHttpServer())
       .get('/api/v1/__probe/page-query?page=not-a-number')
+      .set('Cookie', staff.sessionCookie)
       .expect(400);
   });
 
   it('rejects invalid and unknown request fields with field details', async () => {
     const missingResponse = await request(app.getHttpServer())
       .get('/api/v1/__probe/validation')
+      .set('Cookie', staff.sessionCookie)
       .expect(400);
     const missing = missingResponse.body as ErrorEnvelope;
 
@@ -193,6 +203,7 @@ describe('platform foundation (e2e)', () => {
 
     const extraResponse = await request(app.getHttpServer())
       .get('/api/v1/__probe/validation?name=ok&extra=1')
+      .set('Cookie', staff.sessionCookie)
       .expect(400);
     const extra = extraResponse.body as ErrorEnvelope;
 
@@ -217,6 +228,7 @@ describe('platform foundation (e2e)', () => {
     async (path, expectedStatus, expectedCode) => {
       const response = await request(app.getHttpServer())
         .get(path)
+        .set('Cookie', staff.sessionCookie)
         .expect(expectedStatus);
       const body = response.body as ErrorEnvelope;
 
@@ -234,6 +246,7 @@ describe('platform foundation (e2e)', () => {
   ])('never exposes raw errors from %s', async (path, expectedStatus) => {
     const response = await request(app.getHttpServer())
       .get(path)
+      .set('Cookie', staff.sessionCookie)
       .expect(expectedStatus);
     const body = response.body as ErrorEnvelope;
     const serialized = JSON.stringify(body);
@@ -251,6 +264,9 @@ describe('platform foundation (e2e)', () => {
   it('maps body-parser client faults to sanitized client errors', async () => {
     const tooLarge = await request(app.getHttpServer())
       .post('/api/v1/__probe/echo')
+      .set('Origin', staff.origin)
+      .set('Cookie', staff.sessionCookie)
+      .set('X-CSRF-Token', staff.csrfToken)
       .send({ padding: 'x'.repeat(200_000) })
       .expect(413);
     expect(tooLarge.body).toEqual({
@@ -260,6 +276,9 @@ describe('platform foundation (e2e)', () => {
 
     const unsupportedCharset = await request(app.getHttpServer())
       .post('/api/v1/__probe/echo')
+      .set('Origin', staff.origin)
+      .set('Cookie', staff.sessionCookie)
+      .set('X-CSRF-Token', staff.csrfToken)
       .set('Content-Type', 'application/json; charset=foo')
       .send('{}')
       .expect(415);
@@ -270,6 +289,9 @@ describe('platform foundation (e2e)', () => {
 
     const malformed = await request(app.getHttpServer())
       .post('/api/v1/__probe/echo')
+      .set('Origin', staff.origin)
+      .set('Cookie', staff.sessionCookie)
+      .set('X-CSRF-Token', staff.csrfToken)
       .set('Content-Type', 'application/json')
       .send('{"broken"')
       .expect(400);
@@ -283,6 +305,7 @@ describe('platform foundation (e2e)', () => {
     const allowed = await request(app.getHttpServer())
       .get('/api/v1')
       .set('Origin', 'http://localhost:5173')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
 
     expect(allowed.headers['access-control-allow-origin']).toBe(
@@ -293,6 +316,7 @@ describe('platform foundation (e2e)', () => {
     const denied = await request(app.getHttpServer())
       .get('/api/v1')
       .set('Origin', 'http://untrusted.example')
+      .set('Cookie', staff.sessionCookie)
       .expect(200);
 
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();

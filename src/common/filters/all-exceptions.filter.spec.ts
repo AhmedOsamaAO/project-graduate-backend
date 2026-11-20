@@ -1,13 +1,17 @@
 import {
   ArgumentsHost,
   HttpException,
+  HttpStatus,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ApiError } from '../errors/api-error';
+import { ERROR_CODES } from '../errors/error-codes';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
 interface MockResponse {
   headersSent: boolean;
+  setHeader: jest.Mock;
   status: jest.Mock;
   json: jest.Mock;
 }
@@ -15,6 +19,7 @@ interface MockResponse {
 function createResponse(): MockResponse {
   return {
     headersSent: false,
+    setHeader: jest.fn(),
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
   };
@@ -154,5 +159,27 @@ describe('AllExceptionsFilter', () => {
     expect(logged).not.toContain('SELECT * FROM students');
 
     logger.mockRestore();
+  });
+
+  it('sets custom headers from ApiError on the HTTP response', () => {
+    const response = createResponse();
+
+    filter.catch(
+      new ApiError(
+        HttpStatus.TOO_MANY_REQUESTS,
+        ERROR_CODES.RATE_LIMITED,
+        'Too many sign-in attempts; try again later',
+        undefined,
+        { 'Retry-After': '42' },
+      ),
+      createHost(response),
+    );
+
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '42');
+    expect(response.status).toHaveBeenCalledWith(429);
+    expect(response.json).toHaveBeenCalledWith({
+      code: ERROR_CODES.RATE_LIMITED,
+      message: 'Too many sign-in attempts; try again later',
+    });
   });
 });

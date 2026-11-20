@@ -10,6 +10,7 @@ export class ApiError extends HttpException {
     readonly code: string,
     message: string,
     details?: unknown,
+    readonly headers?: Readonly<Record<string, string>>,
   ) {
     super(
       {

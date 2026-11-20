@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AppService, type AppIdentity } from './app.service';
 import {
   ApiCommonErrorResponses,
@@ -7,6 +7,7 @@ import {
 } from './common/http/api-response.decorators';
 
 @ApiTags('app')
+@ApiCookieAuth('graduate_session')
 @Controller()
 export class AppController {
   constructor(private readonly appService: AppService) {}

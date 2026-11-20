@@ -13,6 +13,7 @@ const testDefaults: Readonly<Record<string, string>> = {
   CSRF_MODE: 'synchronizer',
   SESSION_IDLE_TIMEOUT_MINUTES: '120',
   SESSION_ABSOLUTE_TIMEOUT_DAYS: '7',
+  SESSION_CLEANUP_INTERVAL_MINUTES: '15',
   UPLOAD_MAX_BYTES: String(10 * 1024 * 1024),
 };
 

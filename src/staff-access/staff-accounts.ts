@@ -1,5 +1,4 @@
 import { HttpStatus } from '@nestjs/common';
-import { argon2id, hash } from 'argon2';
 import { ApiError } from '../common/errors/api-error';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import {
@@ -12,6 +11,7 @@ import type {
 } from '../change-history/change-history';
 import type { PrismaClient } from '../generated/prisma/client';
 import { TransactionRunner } from '../prisma/transaction-runner';
+import { canonicalUsername, hashPassword } from './passwords';
 
 interface ProvisionAccount {
   readonly username: string;
@@ -153,16 +153,6 @@ export class StaffAccounts {
   }
 }
 
-function canonicalUsername(value: string): string {
-  const username = value.trim();
-  if (!/^[A-Za-z0-9._-]{1,100}$/.test(username)) {
-    invalid(
-      'Username must contain 1–100 ASCII letters, digits, dots, underscores or hyphens',
-    );
-  }
-  return username.toLowerCase();
-}
-
 function validateActor(actor: OperatorActor): OperatorActor {
   const attribution = actor.attribution.trim();
   if (
@@ -186,20 +176,6 @@ function validateVersion(input: VersionedAccount): void {
   ) {
     invalid('Account ID and expectedVersion must be positive integers');
   }
-}
-
-async function hashPassword(password: string): Promise<string> {
-  if ([...password].length < 12 || Buffer.byteLength(password) > 1024) {
-    invalid(
-      'Password must have at least 12 characters and at most 1024 UTF-8 bytes',
-    );
-  }
-  return hash(password, {
-    type: argon2id,
-    memoryCost: 65536,
-    timeCost: 3,
-    parallelism: 1,
-  });
 }
 
 function invalid(message: string): never {

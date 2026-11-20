@@ -1,8 +1,11 @@
 # Operator-managed staff accounts
 
-This slice adds account commands, session storage, and append-only history. It
-does **not** expose sign-in, public registration, roles, or HTTP account management.
-Each person needs an individual account; there are no default passwords.
+This slice and the authentication layer provide operator account commands,
+session storage, append-only history, staff sign-in/logout/session/CSRF routes
+under `/api/v1/auth/*`, and self-service password change. Account provisioning,
+password reset, and deactivation remain operator-only; there is **no** public
+registration, roles, or HTTP account-administration workflow. Each person needs
+an individual account; there are no default passwords.
 
 ## Database setup
 
@@ -99,6 +102,21 @@ History uses explicit allowlisted account views. It excludes passwords, hashes,
 credential versions, session credentials/digests and CSRF material. A failed
 history append rolls back its owning mutation. History is not operational logs
 or event sourcing; no staff-facing account-history endpoint is added here.
+
+## Session cleanup
+
+The running application sweeps expired or revoked sessions periodically on the
+configurable `SESSION_CLEANUP_INTERVAL_MINUTES` cadence (15 minutes by default)
+and drains any active sweep on shutdown. Operators can also run an explicit
+cleanup pass after `npm run build` using the restricted runtime `DATABASE_URL`
+(and optional `SESSION_IDLE_TIMEOUT_MINUTES`, defaulting to 120):
+
+```sh
+npm run session:cleanup
+```
+
+It prints `{ "data": { "deletedCount": ... } }` on `stdout` and refuses
+privileged database connections.
 
 ## Verification
 

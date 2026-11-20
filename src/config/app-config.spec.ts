@@ -1,5 +1,9 @@
 import { resolve } from 'node:path';
-import { ConfigurationError, loadAppConfig } from './app-config';
+import {
+  ConfigurationError,
+  loadAppConfig,
+  parseSessionIdleTimeoutMinutes,
+} from './app-config';
 
 function validEnv(): NodeJS.ProcessEnv {
   return {
@@ -48,6 +52,7 @@ describe('loadAppConfig', () => {
       csrfMode: 'synchronizer',
       sessionIdleTimeoutMinutes: 120,
       sessionAbsoluteTimeoutDays: 7,
+      sessionCleanupIntervalMinutes: 15,
       privateStorageRoot: '/tmp/project-graduate-storage',
       uploadMaxBytes: 10485760,
     });
@@ -68,6 +73,7 @@ describe('loadAppConfig', () => {
     expect(config.host).toBe('127.0.0.1');
     expect(config.sessionIdleTimeoutMinutes).toBe(120);
     expect(config.sessionAbsoluteTimeoutDays).toBe(7);
+    expect(config.sessionCleanupIntervalMinutes).toBe(15);
     expect(config.privateStorageRoot).toBe(resolve(process.cwd(), 'storage'));
     expect(config.uploadMaxBytes).toBe(10 * 1024 * 1024);
   });
@@ -138,6 +144,8 @@ describe('loadAppConfig', () => {
     ['PORT', 'not-a-number'],
     ['SESSION_IDLE_TIMEOUT_MINUTES', '0'],
     ['SESSION_ABSOLUTE_TIMEOUT_DAYS', 'nope'],
+    ['SESSION_CLEANUP_INTERVAL_MINUTES', '0'],
+    ['SESSION_CLEANUP_INTERVAL_MINUTES', '1441'],
     ['UPLOAD_MAX_BYTES', '-1'],
     ['COOKIE_SECURE', 'sometimes'],
   ])('rejects an invalid %s', (name, value) => {
@@ -183,6 +191,19 @@ describe('loadAppConfig', () => {
     ['missing storage root', { PRIVATE_STORAGE_ROOT: undefined }],
   ])('rejects production configuration with %s', (_label, overrides) => {
     expect(() => loadAppConfig({ ...productionEnv(), ...overrides })).toThrow(
+      ConfigurationError,
+    );
+  });
+
+  it('validates custom SESSION_CLEANUP_INTERVAL_MINUTES and standalone idle parser', () => {
+    const config = loadAppConfig({
+      ...validEnv(),
+      SESSION_CLEANUP_INTERVAL_MINUTES: '30',
+    });
+    expect(config.sessionCleanupIntervalMinutes).toBe(30);
+    expect(parseSessionIdleTimeoutMinutes(undefined)).toBe(120);
+    expect(parseSessionIdleTimeoutMinutes('45')).toBe(45);
+    expect(() => parseSessionIdleTimeoutMinutes('0')).toThrow(
       ConfigurationError,
     );
   });
