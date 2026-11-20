@@ -2,7 +2,7 @@ import { PreLoginCsrfStore } from './pre-login-csrf';
 
 describe('PreLoginCsrfStore', () => {
   it('issues distinct cookie and header tokens that verify before expiry', () => {
-    const store = new PreLoginCsrfStore({ ttlMs: 60_000 });
+    const store = PreLoginCsrfStore.withOptions({ ttlMs: 60_000 });
     const issuedAt = new Date('2026-11-20T12:00:00.000Z');
 
     const issued = store.issue(issuedAt);
@@ -29,7 +29,7 @@ describe('PreLoginCsrfStore', () => {
   });
 
   it('expires pre-login CSRF state at the TTL boundary', () => {
-    const store = new PreLoginCsrfStore({ ttlMs: 10_000 });
+    const store = PreLoginCsrfStore.withOptions({ ttlMs: 10_000 });
     const issuedAt = new Date('2026-11-20T12:00:00.000Z');
     const issued = store.issue(issuedAt);
 
@@ -46,7 +46,10 @@ describe('PreLoginCsrfStore', () => {
   });
 
   it('prevents replay after consume and bounds memory by evicting oldest entries', () => {
-    const store = new PreLoginCsrfStore({ ttlMs: 60_000, maxEntries: 2 });
+    const store = PreLoginCsrfStore.withOptions({
+      ttlMs: 60_000,
+      maxEntries: 2,
+    });
     const now = new Date('2026-11-20T12:00:00.000Z');
 
     const first = store.issue(now);

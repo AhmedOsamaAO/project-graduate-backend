@@ -9,20 +9,23 @@ import { ApiError } from '../common/errors/api-error';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/app-config.module';
-import type { PrismaClient } from '../generated/prisma/client';
+import { Prisma, type PrismaClient } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionRunner } from '../prisma/transaction-runner';
 import { LoginThrottler } from './login-throttler';
 import {
-  generateCsrfToken,
-  generateSessionCredential,
   hashPassword,
-  hashSessionCredential,
   tryCanonicalUsername,
   validatePasswordPolicy,
   verifyDummyPassword,
   verifyPassword,
 } from './passwords';
+import { expiredSessionWhereSql } from './session-cleanup';
+import {
+  generateRandomToken,
+  generateSessionCredential,
+  sha256Hex,
+} from './tokens';
 
 export const STAFF_AUTH_CLOCK = Symbol('STAFF_AUTH_CLOCK');
 export const STAFF_AUTH_PASSWORD_VERIFIER = Symbol(
@@ -64,6 +67,17 @@ export interface ChangePasswordInput {
   readonly newPassword: string;
 }
 
+/** Indicates the caller's own session/account is no longer valid (deactivated or concurrently reset). */
+export class InvalidSessionError extends ApiError {
+  constructor() {
+    super(
+      HttpStatus.UNAUTHORIZED,
+      ERROR_CODES.UNAUTHENTICATED,
+      'Authentication required',
+    );
+  }
+}
+
 interface SessionRow {
   readonly sessionId: number;
   readonly authVersion: number;
@@ -79,6 +93,34 @@ interface SessionRow {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid username or password';
+
+const SESSION_SELECT_COLUMNS = Prisma.sql`
+  s.id AS "sessionId",
+  s.auth_version AS "authVersion",
+  s.csrf_secret AS "csrfToken",
+  u.id AS "userId",
+  u.username AS "username",
+  u.full_name AS "fullName",
+  u.deactivated_at AS "deactivatedAt",
+  u.version AS "version",
+  u.created_at AS "createdAt",
+  u.updated_at AS "updatedAt"
+`;
+
+function activeSessionWhereSql(
+  digest: string,
+  now: Date,
+  idleCutoff: Date,
+): Prisma.Sql {
+  return Prisma.sql`
+    s.credential_digest = ${digest}
+    AND u.id = s.staff_user_id
+    AND u.deactivated_at IS NULL
+    AND u.auth_version = s.auth_version
+    AND s.absolute_expires_at > ${now}
+    AND s.last_seen_at > ${idleCutoff}
+  `;
+}
 
 @Injectable()
 export class StaffAuthService {
@@ -149,9 +191,9 @@ export class StaffAuthService {
 
     const { raw: rawSessionCredential, digest: credentialDigest } =
       generateSessionCredential();
-    const csrfToken = generateCsrfToken();
+    const csrfToken = generateRandomToken();
     const previousDigest = input.previousSessionRaw
-      ? hashSessionCredential(input.previousSessionRaw)
+      ? sha256Hex(input.previousSessionRaw)
       : null;
 
     const outcome = await this.transactions.run(
@@ -163,7 +205,7 @@ export class StaffAuthService {
         previousDigest,
       },
       async (tx, data) => {
-        await tx.$queryRaw`SELECT id FROM staff_user WHERE id = ${data.staffUserId} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM staff_user WHERE id = ${data.staffUserId} FOR SHARE`;
         const current = await tx.staffUser.findUnique({
           where: { id: data.staffUserId },
         });
@@ -237,74 +279,37 @@ export class StaffAuthService {
       return null;
     }
 
-    const digest = hashSessionCredential(rawCredential);
+    const digest = sha256Hex(rawCredential);
     const now = this.clock.now();
     const idleCutoff = new Date(
       now.getTime() - this.config.sessionIdleTimeoutMinutes * 60_000,
     );
+    const activeWhere = activeSessionWhereSql(digest, now, idleCutoff);
 
-    if (options.touch === false) {
-      const rows = await this.prisma.$queryRaw<SessionRow[]>`
-        SELECT
-          s.id AS "sessionId",
-          s.auth_version AS "authVersion",
-          s.csrf_secret AS "csrfToken",
-          u.id AS "userId",
-          u.username AS "username",
-          u.full_name AS "fullName",
-          u.deactivated_at AS "deactivatedAt",
-          u.version AS "version",
-          u.created_at AS "createdAt",
-          u.updated_at AS "updatedAt"
-        FROM staff_session AS s
-        JOIN staff_user AS u ON u.id = s.staff_user_id
-        WHERE s.credential_digest = ${digest}
-          AND u.deactivated_at IS NULL
-          AND u.auth_version = s.auth_version
-          AND s.absolute_expires_at > ${now}
-          AND s.last_seen_at > ${idleCutoff}
-      `;
-      return rows.length === 1 ? toAuthenticatedSession(rows[0]) : null;
-    }
-
-    const rows = await this.prisma.$queryRaw<SessionRow[]>`
-      UPDATE staff_session AS s
-      SET last_seen_at = GREATEST(s.last_seen_at, ${now})
-      FROM staff_user AS u
-      WHERE s.credential_digest = ${digest}
-        AND u.id = s.staff_user_id
-        AND u.deactivated_at IS NULL
-        AND u.auth_version = s.auth_version
-        AND s.absolute_expires_at > ${now}
-        AND s.last_seen_at > ${idleCutoff}
-      RETURNING
-        s.id AS "sessionId",
-        s.auth_version AS "authVersion",
-        s.csrf_secret AS "csrfToken",
-        u.id AS "userId",
-        u.username AS "username",
-        u.full_name AS "fullName",
-        u.deactivated_at AS "deactivatedAt",
-        u.version AS "version",
-        u.created_at AS "createdAt",
-        u.updated_at AS "updatedAt"
-    `;
+    const rows =
+      options.touch === false
+        ? await this.prisma.$queryRaw<SessionRow[]>`
+            SELECT ${SESSION_SELECT_COLUMNS}
+            FROM staff_session AS s
+            JOIN staff_user AS u ON u.id = s.staff_user_id
+            WHERE ${activeWhere}
+          `
+        : await this.prisma.$queryRaw<SessionRow[]>`
+            UPDATE staff_session AS s
+            SET last_seen_at = GREATEST(s.last_seen_at, ${now})
+            FROM staff_user AS u
+            WHERE ${activeWhere}
+            RETURNING ${SESSION_SELECT_COLUMNS}
+          `;
 
     if (rows.length === 0) {
-      await this.prisma.$executeRaw`
-        DELETE FROM staff_session
-        WHERE credential_digest = ${digest}
-          AND (
-            absolute_expires_at <= ${now}
-            OR last_seen_at <= ${idleCutoff}
-            OR EXISTS (
-              SELECT 1
-              FROM staff_user u
-              WHERE u.id = staff_session.staff_user_id
-                AND (u.deactivated_at IS NOT NULL OR u.auth_version <> staff_session.auth_version)
-            )
-          )
-      `;
+      if (options.touch !== false) {
+        await this.prisma.$executeRaw`
+          DELETE FROM staff_session
+          WHERE credential_digest = ${digest}
+            AND (${expiredSessionWhereSql(now, idleCutoff)})
+        `;
+      }
       return null;
     }
 
@@ -352,11 +357,7 @@ export class StaffAuthService {
       user.deactivatedAt !== null ||
       user.authVersion !== session.authVersion
     ) {
-      throw new ApiError(
-        HttpStatus.UNAUTHORIZED,
-        ERROR_CODES.UNAUTHENTICATED,
-        'Authentication required',
-      );
+      throw new InvalidSessionError();
     }
 
     const valid = await this.verifyFn(user.passwordHash, input.currentPassword);
@@ -387,11 +388,7 @@ export class StaffAuthService {
           before.deactivatedAt !== null ||
           before.authVersion !== data.verifiedAuthVersion
         ) {
-          throw new ApiError(
-            HttpStatus.UNAUTHORIZED,
-            ERROR_CODES.UNAUTHENTICATED,
-            'Authentication required',
-          );
+          throw new InvalidSessionError();
         }
         if (before.version !== data.expectedVersion) {
           throw new ApiError(

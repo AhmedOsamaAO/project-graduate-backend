@@ -1,12 +1,6 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PRE_LOGIN_CSRF_TTL_MS } from './cookies';
-import {
-  generateCsrfToken,
-  hashSessionCredential,
-  timingSafeTokenEqual,
-} from './passwords';
-
-export const PRE_LOGIN_CSRF_OPTIONS = Symbol('PRE_LOGIN_CSRF_OPTIONS');
+import { generateRandomToken, sha256Hex, timingSafeTokenEqual } from './tokens';
 
 export interface PreLoginCsrfOptions {
   readonly ttlMs?: number;
@@ -22,17 +16,19 @@ const DEFAULT_MAX_ENTRIES = 10_000;
 
 @Injectable()
 export class PreLoginCsrfStore {
-  private readonly ttlMs: number;
-  private readonly maxEntries: number;
+  private ttlMs = PRE_LOGIN_CSRF_TTL_MS;
+  private maxEntries = DEFAULT_MAX_ENTRIES;
   private readonly entries = new Map<string, PreLoginCsrfEntry>();
 
-  constructor(
-    @Optional()
-    @Inject(PRE_LOGIN_CSRF_OPTIONS)
-    options: PreLoginCsrfOptions = {},
-  ) {
-    this.ttlMs = options.ttlMs ?? PRE_LOGIN_CSRF_TTL_MS;
-    this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+  static withOptions(options: PreLoginCsrfOptions): PreLoginCsrfStore {
+    const store = new PreLoginCsrfStore();
+    if (options.ttlMs !== undefined) {
+      store.ttlMs = options.ttlMs;
+    }
+    if (options.maxEntries !== undefined) {
+      store.maxEntries = options.maxEntries;
+    }
+    return store;
   }
 
   issue(now: Date): {
@@ -48,9 +44,9 @@ export class PreLoginCsrfStore {
       this.entries.delete(oldest.value);
     }
 
-    const cookieValue = generateCsrfToken();
-    const csrfToken = generateCsrfToken();
-    this.entries.set(hashSessionCredential(cookieValue), {
+    const cookieValue = generateRandomToken();
+    const csrfToken = generateRandomToken();
+    this.entries.set(sha256Hex(cookieValue), {
       csrfToken,
       expiresAt: now.getTime() + this.ttlMs,
     });
@@ -71,7 +67,7 @@ export class PreLoginCsrfStore {
       return false;
     }
 
-    const key = hashSessionCredential(cookieValue);
+    const key = sha256Hex(cookieValue);
     const entry = this.entries.get(key);
     if (!entry) {
       return false;
@@ -89,7 +85,7 @@ export class PreLoginCsrfStore {
     if (!cookieValue || cookieValue.length > 512) {
       return;
     }
-    this.entries.delete(hashSessionCredential(cookieValue));
+    this.entries.delete(sha256Hex(cookieValue));
   }
 
   sweep(now: Date): void {

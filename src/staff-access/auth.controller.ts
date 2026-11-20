@@ -21,7 +21,6 @@ import {
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { StaffAccountView } from '../change-history/change-history';
-import { ApiError } from '../common/errors/api-error';
 import {
   ApiCommonErrorResponses,
   ApiDataResponse,
@@ -50,6 +49,7 @@ import {
 import { PreLoginCsrfStore } from './pre-login-csrf';
 import { Public } from './public.decorator';
 import {
+  InvalidSessionError,
   STAFF_AUTH_CLOCK,
   StaffAuthService,
   type AuthenticatedSession,
@@ -97,6 +97,17 @@ export class AuthController {
         touch: false,
       });
       if (session) {
+        if (
+          parseCookieValue(
+            request.headers.cookie,
+            csrfCookieName(this.config),
+          ) !== undefined
+        ) {
+          response.clearCookie(
+            csrfCookieName(this.config),
+            clearCookieOptions(this.config),
+          );
+        }
         return { csrfToken: session.csrfToken };
       }
     }
@@ -142,8 +153,14 @@ export class AuthController {
       previousSessionRaw,
     });
 
+    const staleCsrfCookie = parseCookieValue(
+      request.headers.cookie,
+      csrfCookieName(this.config),
+    );
     if (request.preLoginCsrfCookie) {
       this.preLoginCsrf.consume(request.preLoginCsrfCookie);
+    }
+    if (request.preLoginCsrfCookie || staleCsrfCookie !== undefined) {
       response.clearCookie(
         csrfCookieName(this.config),
         clearCookieOptions(this.config),
@@ -225,11 +242,7 @@ export class AuthController {
       );
       return updated;
     } catch (error: unknown) {
-      if (
-        error instanceof ApiError &&
-        error.getStatus() === 401 &&
-        error.message === 'Authentication required'
-      ) {
+      if (error instanceof InvalidSessionError) {
         response.clearCookie(
           sessionCookieName(this.config),
           clearCookieOptions(this.config),

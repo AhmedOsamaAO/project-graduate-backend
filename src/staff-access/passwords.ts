@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { HttpStatus } from '@nestjs/common';
 import { argon2id, hash, verify } from 'argon2';
 import { ApiError } from '../common/errors/api-error';
@@ -84,33 +84,4 @@ export function canonicalUsername(value: string): string {
     );
   }
   return normalized;
-}
-
-/** Generates at least 32 random bytes for the opaque cookie credential and its SHA-256 hex digest. */
-export function generateSessionCredential(): {
-  readonly raw: string;
-  readonly digest: string;
-} {
-  const raw = randomBytes(32).toString('base64url');
-  return { raw, digest: hashSessionCredential(raw) };
-}
-
-/** Computes the lowercase 64-character SHA-256 hex digest stored in PostgreSQL. */
-export function hashSessionCredential(raw: string): string {
-  return createHash('sha256').update(raw, 'utf8').digest('hex');
-}
-
-/** Generates independent 32-byte random synchronizer CSRF token material. */
-export function generateCsrfToken(): string {
-  return randomBytes(32).toString('base64url');
-}
-
-/** Constant-time comparison for opaque random tokens via fixed-length SHA-256 digests. */
-export function timingSafeTokenEqual(a: string, b: string): boolean {
-  if (!a || !b) {
-    return false;
-  }
-  const digestA = createHash('sha256').update(a, 'utf8').digest();
-  const digestB = createHash('sha256').update(b, 'utf8').digest();
-  return timingSafeEqual(digestA, digestB);
 }

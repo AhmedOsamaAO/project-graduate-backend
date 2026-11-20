@@ -297,6 +297,21 @@ describe('staff authentication, sessions, and CSRF (e2e)', () => {
       });
       expect(afterCsrf.lastSeenAt).toEqual(beforeCsrf.lastSeenAt);
 
+      // Authenticated GET /auth/csrf clears any leftover pre-login CSRF cookie.
+      const staleCsrfRes = await request(app.getHttpServer())
+        .get('/api/v1/auth/csrf')
+        .set('Cookie', `${sessionPair}; graduate_csrf=stale-leftover`)
+        .expect(200);
+      expect(
+        (staleCsrfRes.body as { data: { csrfToken: string } }).data.csrfToken,
+      ).toBe(loginData.csrfToken);
+      expect(
+        findSetCookieHeader(
+          staleCsrfRes.headers['set-cookie'],
+          'graduate_csrf',
+        ),
+      ).toMatch(/Expires=Thu, 01 Jan 1970|Max-Age=0/);
+
       // GET /auth/me returns user and csrfToken.
       const meRes = await request(app.getHttpServer())
         .get('/api/v1/auth/me')
@@ -356,6 +371,24 @@ describe('staff authentication, sessions, and CSRF (e2e)', () => {
       expect((logoutBadCsrf.body as ErrorEnvelope).code).toBe(
         ERROR_CODES.CSRF_INVALID,
       );
+
+      // An already-authenticated caller with a leftover pre-login CSRF cookie can still re-login using their active session CSRF token.
+      const reloginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .set('Origin', origin)
+        .set('Cookie', `${sessionPair}; graduate_csrf=stale-leftover`)
+        .set('X-CSRF-Token', loginData.csrfToken)
+        .send({ username: staff.username, password: 'csrf e2e user password' })
+        .expect(200);
+      expect(
+        findSetCookieHeader(reloginRes.headers['set-cookie'], 'graduate_csrf'),
+      ).toMatch(/Expires=Thu, 01 Jan 1970|Max-Age=0/);
+      expect(
+        findSetCookieHeader(
+          reloginRes.headers['set-cookie'],
+          'graduate_session',
+        ),
+      ).toBeDefined();
     });
 
     it('returns identical generic login errors and records redacted SIGN_IN_FAILED history', async () => {
@@ -795,9 +828,32 @@ describe('staff authentication, sessions, and CSRF (e2e)', () => {
       ).toMatch(/Expires=Thu, 01 Jan 1970|Max-Age=0/);
 
       const sessionPair = cookiePairFromSetCookie(sessionHeader!);
+      const prodSessionBefore = await app
+        .get(PrismaService)
+        .staffSession.findFirstOrThrow({ orderBy: { id: 'desc' } });
+
+      // Rejected 403 state-changing requests (bad Origin / invalid CSRF) must not extend lastSeenAt.
+      clock.advanceMs(5 * 60_000);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/logout')
+        .set('Cookie', sessionPair)
+        .set('X-CSRF-Token', 'invalid-csrf')
+        .expect(403);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/logout')
+        .set('Origin', prodOrigin)
+        .set('Cookie', sessionPair)
+        .set('X-CSRF-Token', 'invalid-csrf')
+        .expect(403);
+      const prodSessionAfter = await app
+        .get(PrismaService)
+        .staffSession.findUniqueOrThrow({
+          where: { id: prodSessionBefore.id },
+        });
+      expect(prodSessionAfter.lastSeenAt).toEqual(prodSessionBefore.lastSeenAt);
 
       // Verify idle expiry (2 hours) and absolute expiry (7 days) over HTTP.
-      clock.advanceMs(119 * 60_000);
+      clock.advanceMs(114 * 60_000);
       await request(app.getHttpServer())
         .get('/api/v1/auth/me')
         .set('Cookie', sessionPair)

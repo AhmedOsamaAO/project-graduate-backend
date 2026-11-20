@@ -1,4 +1,21 @@
-import type { PrismaClient } from '../generated/prisma/client';
+import { Prisma, type PrismaClient } from '../generated/prisma/client';
+
+/** Shared SQL predicate identifying expired or invalidated sessions. */
+export function expiredSessionWhereSql(
+  now: Date,
+  idleCutoff: Date,
+): Prisma.Sql {
+  return Prisma.sql`
+    absolute_expires_at <= ${now}
+    OR last_seen_at <= ${idleCutoff}
+    OR EXISTS (
+      SELECT 1
+      FROM staff_user u
+      WHERE u.id = staff_session.staff_user_id
+        AND (u.deactivated_at IS NOT NULL OR u.auth_version <> staff_session.auth_version)
+    )
+  `;
+}
 
 /** Deletes idle-expired, absolute-expired, deactivated-user, and stale-version sessions. */
 export async function cleanupExpiredSessions(
@@ -12,14 +29,7 @@ export async function cleanupExpiredSessions(
 
   const deletedCount = await prisma.$executeRaw`
     DELETE FROM staff_session
-    WHERE absolute_expires_at <= ${now}
-      OR last_seen_at <= ${idleCutoff}
-      OR EXISTS (
-        SELECT 1
-        FROM staff_user u
-        WHERE u.id = staff_session.staff_user_id
-          AND (u.deactivated_at IS NOT NULL OR u.auth_version <> staff_session.auth_version)
-      )
+    WHERE ${expiredSessionWhereSql(now, idleCutoff)}
   `;
 
   return { deletedCount: Number(deletedCount) };

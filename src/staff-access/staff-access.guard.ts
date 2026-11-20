@@ -19,14 +19,15 @@ import {
   sessionCookieName,
 } from './cookies';
 import type { StaffAuthenticatedRequest } from './current-session.decorator';
-import { timingSafeTokenEqual } from './passwords';
 import { PreLoginCsrfStore } from './pre-login-csrf';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import {
   STAFF_AUTH_CLOCK,
   StaffAuthService,
+  type AuthenticatedSession,
   type Clock,
 } from './staff-auth.service';
+import { timingSafeTokenEqual } from './tokens';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -87,20 +88,10 @@ export class StaffAccessGuard implements CanActivate {
         csrfCookieName(this.config),
       );
 
-      if (preLoginCookie !== undefined) {
-        if (
-          !this.preLoginCsrf.verify(
-            preLoginCookie,
-            csrfHeader,
-            this.clock.now(),
-          )
-        ) {
-          throw new ApiError(
-            HttpStatus.FORBIDDEN,
-            ERROR_CODES.CSRF_INVALID,
-            'Invalid CSRF token',
-          );
-        }
+      if (
+        preLoginCookie !== undefined &&
+        this.preLoginCsrf.verify(preLoginCookie, csrfHeader, this.clock.now())
+      ) {
         request.preLoginCsrfCookie = preLoginCookie;
         return true;
       }
@@ -113,41 +104,37 @@ export class StaffAccessGuard implements CanActivate {
         touch: false,
       });
       if (
-        !activeSession ||
-        !csrfHeader ||
-        !timingSafeTokenEqual(activeSession.csrfToken, csrfHeader)
+        activeSession &&
+        csrfHeader !== undefined &&
+        timingSafeTokenEqual(activeSession.csrfToken, csrfHeader)
       ) {
-        throw new ApiError(
-          HttpStatus.FORBIDDEN,
-          ERROR_CODES.CSRF_INVALID,
-          'Invalid CSRF token',
-        );
+        return true;
       }
-      return true;
+
+      throw new ApiError(
+        HttpStatus.FORBIDDEN,
+        ERROR_CODES.CSRF_INVALID,
+        'Invalid CSRF token',
+      );
     }
 
     const sessionRaw = parseCookieValue(
       request.headers.cookie,
       sessionCookieName(this.config),
     );
-    const session = await this.staffAuth.resolveSession(sessionRaw, {
-      touch: true,
-    });
-    if (!session) {
-      if (sessionRaw !== undefined) {
-        response.clearCookie(
-          sessionCookieName(this.config),
-          clearCookieOptions(this.config),
-        );
-      }
-      throw new ApiError(
-        HttpStatus.UNAUTHORIZED,
-        ERROR_CODES.UNAUTHENTICATED,
-        'Authentication required',
+
+    if (!isStateChanging) {
+      request.staffSession = await this.requireSession(
+        sessionRaw,
+        response,
+        true,
       );
+      return true;
     }
 
-    if (isStateChanging && this.config.csrfMode === 'synchronizer') {
+    const session = await this.requireSession(sessionRaw, response, false);
+
+    if (this.config.csrfMode === 'synchronizer') {
       this.assertAllowedOrigin(origin);
       const csrfHeader = extractSingleHeader(
         request.headers['x-csrf-token'],
@@ -162,8 +149,34 @@ export class StaffAccessGuard implements CanActivate {
       }
     }
 
-    request.staffSession = session;
+    request.staffSession = await this.requireSession(
+      sessionRaw,
+      response,
+      true,
+    );
     return true;
+  }
+
+  private async requireSession(
+    sessionRaw: string | undefined,
+    response: Response,
+    touch: boolean,
+  ): Promise<AuthenticatedSession> {
+    const session = await this.staffAuth.resolveSession(sessionRaw, { touch });
+    if (!session) {
+      if (sessionRaw !== undefined) {
+        response.clearCookie(
+          sessionCookieName(this.config),
+          clearCookieOptions(this.config),
+        );
+      }
+      throw new ApiError(
+        HttpStatus.UNAUTHORIZED,
+        ERROR_CODES.UNAUTHENTICATED,
+        'Authentication required',
+      );
+    }
+    return session;
   }
 
   private assertAllowedOrigin(origin: string | undefined): void {

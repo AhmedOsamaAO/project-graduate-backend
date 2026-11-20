@@ -3,6 +3,10 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import type { StaffAccountView } from '../../src/change-history/change-history';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import {
+  csrfCookieName as resolveCsrfCookieName,
+  sessionCookieName as resolveSessionCookieName,
+} from '../../src/staff-access/cookies';
 import { StaffAccounts } from '../../src/staff-access/staff-accounts';
 
 export interface SignedInStaff {
@@ -45,12 +49,9 @@ export async function provisionAndLogin<T extends App>(
   const fullName = options.fullName ?? 'E2E Staff';
   const password = options.password ?? 'e2e staff valid password';
   const origin = options.origin ?? 'http://localhost:5173';
-  const csrfCookieName = options.secureCookies
-    ? '__Host-graduate_csrf'
-    : 'graduate_csrf';
-  const sessionCookieName = options.secureCookies
-    ? '__Host-graduate_session'
-    : 'graduate_session';
+  const cookieConfig = { cookieSecure: options.secureCookies ?? false };
+  const csrfCookieName = resolveCsrfCookieName(cookieConfig);
+  const sessionCookieName = resolveSessionCookieName(cookieConfig);
 
   const accounts = new StaffAccounts(app.get(PrismaService));
   await accounts.provision(

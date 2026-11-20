@@ -40,7 +40,6 @@ export class LoginDto {
 
   @ApiProperty({
     format: 'password',
-    minLength: 12,
     maxLength: 1024,
     example: 'a long individual password',
   })
