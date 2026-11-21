@@ -102,6 +102,13 @@ function setupOpenApi(app: INestApplication): void {
         'Staff-operated API for the Computer and Information faculty postgraduate office.',
       )
       .setVersion('1.0')
+      .addCookieAuth('graduate_session', {
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'graduate_session',
+        description:
+          'HttpOnly opaque session cookie (__Host-graduate_session when COOKIE_SECURE=true in production).',
+      })
       .addServer('/')
       .build(),
     {

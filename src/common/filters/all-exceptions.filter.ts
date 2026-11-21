@@ -30,6 +30,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const { status, body } = toErrorResponse(exception);
 
+    if (exception instanceof ApiError && exception.headers) {
+      for (const [name, value] of Object.entries(exception.headers)) {
+        response.setHeader(name, value);
+      }
+    }
+
     if (status >= 500) {
       this.logUnexpected(exception, request.method, body.code);
     }

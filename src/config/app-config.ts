@@ -10,6 +10,7 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 120;
 const DEFAULT_SESSION_ABSOLUTE_TIMEOUT_DAYS = 7;
+const DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES = 15;
 const DEFAULT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
@@ -25,6 +26,7 @@ export interface AppConfig {
   readonly csrfMode: CsrfMode;
   readonly sessionIdleTimeoutMinutes: number;
   readonly sessionAbsoluteTimeoutDays: number;
+  readonly sessionCleanupIntervalMinutes: number;
   readonly privateStorageRoot: string;
   readonly uploadMaxBytes: number;
 }
@@ -78,12 +80,8 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     );
   }
 
-  const sessionIdleTimeoutMinutes = parseInteger(
+  const sessionIdleTimeoutMinutes = parseSessionIdleTimeoutMinutes(
     env.SESSION_IDLE_TIMEOUT_MINUTES,
-    'SESSION_IDLE_TIMEOUT_MINUTES',
-    DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES,
-    1,
-    60 * 24 * 30,
   );
   const sessionAbsoluteTimeoutDays = parseInteger(
     env.SESSION_ABSOLUTE_TIMEOUT_DAYS,
@@ -97,6 +95,13 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       'SESSION_ABSOLUTE_TIMEOUT_DAYS must exceed SESSION_IDLE_TIMEOUT_MINUTES',
     );
   }
+  const sessionCleanupIntervalMinutes = parseInteger(
+    env.SESSION_CLEANUP_INTERVAL_MINUTES,
+    'SESSION_CLEANUP_INTERVAL_MINUTES',
+    DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES,
+    1,
+    1440,
+  );
 
   const privateStorageRoot = parseStorageRoot(env, isProduction);
   const uploadMaxBytes = parseInteger(
@@ -118,9 +123,23 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     csrfMode,
     sessionIdleTimeoutMinutes,
     sessionAbsoluteTimeoutDays,
+    sessionCleanupIntervalMinutes,
     privateStorageRoot,
     uploadMaxBytes,
   };
+}
+
+/** Parses and validates the idle session timeout in minutes using the shared policy. */
+export function parseSessionIdleTimeoutMinutes(
+  value: string | undefined,
+): number {
+  return parseInteger(
+    value,
+    'SESSION_IDLE_TIMEOUT_MINUTES',
+    DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES,
+    1,
+    60 * 24 * 30,
+  );
 }
 
 function parseEnvironment(value: string | undefined): AppEnvironment {

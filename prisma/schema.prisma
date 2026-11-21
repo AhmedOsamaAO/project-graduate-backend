@@ -21,6 +21,9 @@ enum HistoryAction {
   ACCOUNT_PROVISIONED
   PASSWORD_RESET
   ACCOUNT_DEACTIVATED
+  SIGN_IN
+  SIGN_IN_FAILED
+  PASSWORD_CHANGED
 
   @@map("history_action")
 }
@@ -61,6 +64,7 @@ model StaffSession {
   staffUser         StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([staffUserId])
+  @@index([lastSeenAt])
   @@index([absoluteExpiresAt])
   @@map("staff_session")
 }

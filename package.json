@@ -18,6 +18,7 @@
     "prisma:migrate": "prisma migrate dev --config prisma7.config.ts",
     "prisma:deploy": "prisma migrate deploy --config prisma7.config.ts",
     "prisma:studio": "prisma studio --config prisma7.config.ts",
+    "session:cleanup": "node dist/staff-access/session-cleanup-main.js",
     "staff": "node dist/staff-access/operator-main.js",
     "start": "NODE_ENV=${NODE_ENV:-development} nest start",
     "start:dev": "NODE_ENV=${NODE_ENV:-development} nest start --watch",

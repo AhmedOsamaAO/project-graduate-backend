@@ -5,8 +5,23 @@ export interface OperatorActor {
   readonly attribution: string;
 }
 
+export interface StaffActor {
+  readonly staffUserId: number;
+}
+
+export type StaffAccountSnapshotSource = Pick<
+  StaffUser,
+  | 'id'
+  | 'username'
+  | 'fullName'
+  | 'deactivatedAt'
+  | 'version'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
 /** Explicit allowlist used both for command results and account history. */
-export function staffAccountView(staff: StaffUser) {
+export function staffAccountView(staff: StaffAccountSnapshotSource) {
   return {
     id: staff.id,
     username: staff.username,
@@ -19,6 +34,10 @@ export function staffAccountView(staff: StaffUser) {
 }
 
 export type StaffAccountView = ReturnType<typeof staffAccountView>;
+
+function toHistorySnapshot(staff: StaffUser | null) {
+  return staff === null ? Prisma.DbNull : staffAccountView(staff);
+}
 
 /** No client of its own: appends can only join the owning mutation. */
 export async function appendAccountHistory(
@@ -35,8 +54,46 @@ export async function appendAccountHistory(
       action,
       actorKind: 'OPERATOR',
       operatorAttribution: actor.attribution,
-      before: before === null ? Prisma.DbNull : staffAccountView(before),
+      before: toHistorySnapshot(before),
       after: staffAccountView(after),
+    },
+  });
+}
+
+/** Appends a staff-attributed account event inside the owning transaction. */
+export async function appendStaffAccountHistory(
+  tx: Prisma.TransactionClient,
+  actor: StaffActor,
+  action: 'SIGN_IN' | 'PASSWORD_CHANGED',
+  before: StaffUser | null,
+  after: StaffUser,
+): Promise<void> {
+  await tx.changeHistory.create({
+    data: {
+      recordType: 'STAFF_USER',
+      recordId: after.id,
+      action,
+      actorKind: 'STAFF',
+      staffUserId: actor.staffUserId,
+      before: toHistorySnapshot(before),
+      after: staffAccountView(after),
+    },
+  });
+}
+
+/** Appends an unauthenticated sign-in failure without raw input or secrets. */
+export async function appendFailedSignInHistory(
+  tx: Prisma.TransactionClient,
+  recordId: number | null,
+): Promise<void> {
+  await tx.changeHistory.create({
+    data: {
+      recordType: 'STAFF_USER',
+      recordId,
+      action: 'SIGN_IN_FAILED',
+      actorKind: 'UNAUTHENTICATED',
+      before: Prisma.DbNull,
+      after: Prisma.DbNull,
     },
   });
 }
