@@ -27,7 +27,6 @@ interface InstitutionPayload {
   id: number;
   name: string;
   institutionType: string;
-  isFixedOffice: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -37,7 +36,6 @@ interface FacultyPayload {
   id: number;
   institutionId: number;
   name: string;
-  isFixedOffice: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +91,49 @@ describe('reference catalog and fixed office (e2e)', () => {
         await environment.close();
       }
     });
+
+    async function postResource<T>(
+      path: string,
+      payload: Record<string, unknown>,
+      staff = staffOne,
+    ): Promise<T> {
+      const response = await request(app.getHttpServer())
+        .post(path)
+        .set('Origin', staff.origin)
+        .set('Cookie', staff.sessionCookie)
+        .set('X-CSRF-Token', staff.csrfToken)
+        .send(payload)
+        .expect(201);
+      return (response.body as { data: T }).data;
+    }
+
+    async function patchResource<T>(
+      path: string,
+      payload: Record<string, unknown>,
+      staff = staffOne,
+    ): Promise<T> {
+      const response = await request(app.getHttpServer())
+        .patch(path)
+        .set('Origin', staff.origin)
+        .set('Cookie', staff.sessionCookie)
+        .set('X-CSRF-Token', staff.csrfToken)
+        .send(payload)
+        .expect(200);
+      return (response.body as { data: T }).data;
+    }
+
+    async function deleteResource(
+      path: string,
+      expectedVersion: number,
+      staff = staffOne,
+    ): Promise<void> {
+      await request(app.getHttpServer())
+        .delete(`${path}?expectedVersion=${expectedVersion}`)
+        .set('Origin', staff.origin)
+        .set('Cookie', staff.sessionCookie)
+        .set('X-CSRF-Token', staff.csrfToken)
+        .expect(204);
+    }
 
     it('rejects unauthenticated requests on all catalog and history endpoints', async () => {
       for (const makeRequest of [
@@ -159,27 +200,27 @@ describe('reference catalog and fixed office (e2e)', () => {
         .get(`/api/v1/institutions/${FIXED_OFFICE.institution.id}`)
         .set('Cookie', staffOne.sessionCookie)
         .expect(200);
-      expect((instRes.body as { data: InstitutionPayload }).data).toMatchObject(
-        {
-          id: 1,
-          name: 'Zagazig University',
-          institutionType: 'PUBLIC_UNIVERSITY',
-          isFixedOffice: true,
-          version: 1,
-        },
-      );
+      const instData = (instRes.body as { data: InstitutionPayload }).data;
+      expect(instData).toMatchObject({
+        id: 1,
+        name: 'Zagazig University',
+        institutionType: 'PUBLIC_UNIVERSITY',
+        version: 1,
+      });
+      expect(instData).not.toHaveProperty('isFixedOffice');
 
       const facRes = await request(app.getHttpServer())
         .get(`/api/v1/faculties/${FIXED_OFFICE.faculty.id}`)
         .set('Cookie', staffOne.sessionCookie)
         .expect(200);
-      expect((facRes.body as { data: FacultyPayload }).data).toMatchObject({
+      const facData = (facRes.body as { data: FacultyPayload }).data;
+      expect(facData).toMatchObject({
         id: 1,
         institutionId: 1,
         name: 'Faculty of Computer and Information',
-        isFixedOffice: true,
         version: 1,
       });
+      expect(facData).not.toHaveProperty('isFixedOffice');
 
       const fixedHistory = await request(app.getHttpServer())
         .get('/api/v1/institutions/1/history')
@@ -227,337 +268,363 @@ describe('reference catalog and fixed office (e2e)', () => {
       expect(delFac.body).toMatchObject({ code: 'FIXED_RECORD_PROTECTED' });
     });
 
-    it('supports full CRUD, search, filtering, sorting, conflicts, and history across institutions, faculties, and departments', async () => {
-      // Create institutions including special SQL LIKE characters (% and _)
-      const instA = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/institutions')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              name: '  Cairo University  ',
-              institutionType: 'PUBLIC_UNIVERSITY',
-            })
-            .expect(201)
-        ).body as { data: InstitutionPayload }
-      ).data;
-      expect(instA.name).toBe('Cairo University');
-      expect(instA.isFixedOffice).toBe(false);
-      expect(instA.version).toBe(1);
-
-      const instB = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/institutions')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              name: 'Institute 100% _Special',
-              institutionType: 'PRIVATE_INSTITUTE',
-            })
-            .expect(201)
-        ).body as { data: InstitutionPayload }
-      ).data;
-
-      // Literal % and _ search does not match arbitrary records
-      const percentSearch = await request(app.getHttpServer())
-        .get('/api/v1/institutions')
-        .query({ search: '100% _' })
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(200);
-      expect(
-        (percentSearch.body as { items: InstitutionPayload[] }).items.map(
-          (i) => i.id,
-        ),
-      ).toEqual([instB.id]);
-
-      // Filter by institutionType + deterministic sortBy/sortOrder
-      const filteredInst = await request(app.getHttpServer())
-        .get('/api/v1/institutions')
-        .query({
+    it('creates, searches literally for LIKE wildcards, filters, sorts, and updates institutions with version checks', async () => {
+      const instA = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        {
+          name: '  Cairo University  ',
           institutionType: 'PUBLIC_UNIVERSITY',
-          sortBy: 'name',
-          sortOrder: 'desc',
-        })
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(200);
-      expect(
-        (filteredInst.body as { items: InstitutionPayload[] }).items.map(
-          (i) => i.name,
-        ),
-      ).toEqual(['Zagazig University', 'Cairo University']);
-
-      // Update institution with version check + stale version conflict
-      const updatedInstA = (
-        (
-          await request(app.getHttpServer())
-            .patch(`/api/v1/institutions/${instA.id}`)
-            .set('Origin', staffTwo.origin)
-            .set('Cookie', staffTwo.sessionCookie)
-            .set('X-CSRF-Token', staffTwo.csrfToken)
-            .send({ expectedVersion: 1, name: 'Cairo University Updated' })
-            .expect(200)
-        ).body as { data: InstitutionPayload }
-      ).data;
-      expect(updatedInstA.version).toBe(2);
-
-      const staleInst = await request(app.getHttpServer())
-        .patch(`/api/v1/institutions/${instA.id}`)
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .send({ expectedVersion: 1, name: 'Stale Name' })
-        .expect(409);
-      expect(staleInst.body).toMatchObject({ code: 'STALE_VERSION' });
-
-      // Faculty CRUD + uniqueness within institution + reparenting block on fixed
-      const facA = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/faculties')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              institutionId: instA.id,
-              name: 'Faculty of Engineering',
-            })
-            .expect(201)
-        ).body as { data: FacultyPayload }
-      ).data;
-
-      const dupFac = await request(app.getHttpServer())
-        .post('/api/v1/faculties')
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .send({
-          institutionId: instA.id,
-          name: 'Faculty of Engineering',
-        })
-        .expect(409);
-      expect(dupFac.body).toMatchObject({ code: 'FACULTY_NAME_EXISTS' });
-
-      // Same faculty name under a different institution is allowed
-      const facB = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/faculties')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              institutionId: instB.id,
-              name: 'Faculty of Engineering',
-            })
-            .expect(201)
-        ).body as { data: FacultyPayload }
-      ).data;
-
-      // List faculties with deterministic sortBy=name and ID tie-breaker
-      const listedFac = await request(app.getHttpServer())
-        .get('/api/v1/faculties')
-        .query({ search: 'Engineering', sortBy: 'name', sortOrder: 'asc' })
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(200);
-      expect(
-        (listedFac.body as { items: FacultyPayload[] }).items.map((f) => f.id),
-      ).toEqual([facA.id, facB.id]);
-
-      // Department CRUD under fixed faculty and non-fixed faculty
-      const deptFixed = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/departments')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              facultyId: FIXED_OFFICE.faculty.id,
-              name: 'Computer Science',
-            })
-            .expect(201)
-        ).body as { data: DepartmentPayload }
-      ).data;
-
-      const deptA = (
-        (
-          await request(app.getHttpServer())
-            .post('/api/v1/departments')
-            .set('Origin', staffOne.origin)
-            .set('Cookie', staffOne.sessionCookie)
-            .set('X-CSRF-Token', staffOne.csrfToken)
-            .send({
-              facultyId: facA.id,
-              name: 'Systems Engineering',
-            })
-            .expect(201)
-        ).body as { data: DepartmentPayload }
-      ).data;
-
-      const dupDept = await request(app.getHttpServer())
-        .post('/api/v1/departments')
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .send({
-          facultyId: facA.id,
-          name: 'Systems Engineering',
-        })
-        .expect(409);
-      expect(dupDept.body).toMatchObject({ code: 'DEPARTMENT_NAME_EXISTS' });
-
-      // Filter departments by institutionId
-      const filteredDepts = await request(app.getHttpServer())
-        .get('/api/v1/departments')
-        .query({ institutionId: FIXED_OFFICE.institution.id })
-        .set('Cookie', staffTwo.sessionCookie)
-        .expect(200);
-      expect(
-        (filteredDepts.body as { items: DepartmentPayload[] }).items.map(
-          (d) => d.id,
-        ),
-      ).toEqual([deptFixed.id]);
-
-      // Update department
-      const updatedDeptA = (
-        (
-          await request(app.getHttpServer())
-            .patch(`/api/v1/departments/${deptA.id}`)
-            .set('Origin', staffTwo.origin)
-            .set('Cookie', staffTwo.sessionCookie)
-            .set('X-CSRF-Token', staffTwo.csrfToken)
-            .send({ expectedVersion: 1, name: 'Computer Engineering' })
-            .expect(200)
-        ).body as { data: DepartmentPayload }
-      ).data;
-      expect(updatedDeptA.version).toBe(2);
-
-      // Deleting referenced faculty fails with RECORD_IN_USE
-      const inUseFac = await request(app.getHttpServer())
-        .delete(`/api/v1/faculties/${facA.id}?expectedVersion=${facA.version}`)
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(409);
-      expect(inUseFac.body).toMatchObject({ code: 'RECORD_IN_USE' });
-
-      // Delete department, then delete faculty, then delete institution
-      await request(app.getHttpServer())
-        .delete(
-          `/api/v1/departments/${deptA.id}?expectedVersion=${updatedDeptA.version}`,
-        )
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(204);
-
-      await request(app.getHttpServer())
-        .delete(`/api/v1/faculties/${facA.id}?expectedVersion=${facA.version}`)
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(204);
-
-      await request(app.getHttpServer())
-        .delete(
-          `/api/v1/institutions/${instA.id}?expectedVersion=${updatedInstA.version}`,
-        )
-        .set('Origin', staffTwo.origin)
-        .set('Cookie', staffTwo.sessionCookie)
-        .set('X-CSRF-Token', staffTwo.csrfToken)
-        .expect(204);
-
-      // Deleted institution is no longer retrievable via GET
-      await request(app.getHttpServer())
-        .get(`/api/v1/institutions/${instA.id}`)
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(404);
-
-      // Paged, newest-first history remains readable by any authenticated staff user including DELETED
-      const historyPage1 = await request(app.getHttpServer())
-        .get(`/api/v1/institutions/${instA.id}/history`)
-        .query({ page: 1, pageSize: 2 })
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(200);
-      const page1Body = historyPage1.body as {
-        items: HistoryPayload[];
-        total: number;
-        page: number;
-        pageSize: number;
-      };
-      expect(page1Body.total).toBe(3);
-      expect(page1Body.page).toBe(1);
-      expect(page1Body.pageSize).toBe(2);
-      expect(page1Body.items.map((item) => item.action)).toEqual([
-        'DELETED',
-        'UPDATED',
-      ]);
-      expect(page1Body.items[0]).toMatchObject({
-        recordType: 'EDUCATIONAL_INSTITUTION',
-        recordId: instA.id,
-        action: 'DELETED',
-        actorKind: 'STAFF',
-        staffUser: {
-          id: staffTwo.user.id,
-          username: staffTwo.user.username,
-          fullName: staffTwo.user.fullName,
         },
-        after: null,
-      });
-      expect(JSON.stringify(page1Body)).not.toMatch(
-        /passwordHash|csrfSecret|credentialDigest|operationCorrelation/,
+      );
+      expect(instA.name).toBe('Cairo University');
+      expect(instA).not.toHaveProperty('isFixedOffice');
+      expect(instA.version).toBe(1);
+      let instAVersion = instA.version;
+
+      const instB = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        {
+          name: 'Institute 100% _Special',
+          institutionType: 'PRIVATE_INSTITUTE',
+        },
       );
 
-      const historyPage2 = await request(app.getHttpServer())
-        .get(`/api/v1/institutions/${instA.id}/history`)
-        .query({ page: 2, pageSize: 2 })
-        .set('Cookie', staffTwo.sessionCookie)
-        .expect(200);
-      const page2Body = historyPage2.body as { items: HistoryPayload[] };
-      expect(page2Body.items.map((item) => item.action)).toEqual(['CREATED']);
+      try {
+        const percentSearch = await request(app.getHttpServer())
+          .get('/api/v1/institutions')
+          .query({ search: '100% _' })
+          .set('Cookie', staffOne.sessionCookie)
+          .expect(200);
+        expect(
+          (percentSearch.body as { items: InstitutionPayload[] }).items.map(
+            (i) => i.id,
+          ),
+        ).toEqual([instB.id]);
 
-      // History route is read-only (POST fails as 404; never mutates history)
+        const filteredInst = await request(app.getHttpServer())
+          .get('/api/v1/institutions')
+          .query({
+            institutionType: 'PUBLIC_UNIVERSITY',
+            sortBy: 'name',
+            sortOrder: 'desc',
+          })
+          .set('Cookie', staffOne.sessionCookie)
+          .expect(200);
+        expect(
+          (filteredInst.body as { items: InstitutionPayload[] }).items.map(
+            (i) => i.name,
+          ),
+        ).toEqual(['Zagazig University', 'Cairo University']);
+
+        const updatedInstA = await patchResource<InstitutionPayload>(
+          `/api/v1/institutions/${instA.id}`,
+          { expectedVersion: 1, name: 'Cairo University Updated' },
+          staffTwo,
+        );
+        instAVersion = updatedInstA.version;
+        expect(updatedInstA.version).toBe(2);
+
+        const staleInst = await request(app.getHttpServer())
+          .patch(`/api/v1/institutions/${instA.id}`)
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .send({ expectedVersion: 1, name: 'Stale Name' })
+          .expect(409);
+        expect(staleInst.body).toMatchObject({ code: 'STALE_VERSION' });
+      } finally {
+        await deleteResource(
+          `/api/v1/institutions/${instA.id}`,
+          instAVersion,
+        ).catch(() => undefined);
+        await deleteResource(
+          `/api/v1/institutions/${instB.id}`,
+          instB.version,
+        ).catch(() => undefined);
+      }
+    });
+
+    it('enforces faculty uniqueness per institution and deterministic name-plus-id sorting', async () => {
+      const instA = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'Faculty Uniq Univ A', institutionType: 'PUBLIC_UNIVERSITY' },
+      );
+      const instB = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'Faculty Uniq Univ B', institutionType: 'PRIVATE_INSTITUTE' },
+      );
+      let facA: FacultyPayload | null = null;
+      let facB: FacultyPayload | null = null;
+
+      try {
+        facA = await postResource<FacultyPayload>('/api/v1/faculties', {
+          institutionId: instA.id,
+          name: 'Faculty of Engineering',
+        });
+        expect(facA).not.toHaveProperty('isFixedOffice');
+
+        const dupFac = await request(app.getHttpServer())
+          .post('/api/v1/faculties')
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .send({
+            institutionId: instA.id,
+            name: 'Faculty of Engineering',
+          })
+          .expect(409);
+        expect(dupFac.body).toMatchObject({ code: 'FACULTY_NAME_EXISTS' });
+
+        facB = await postResource<FacultyPayload>('/api/v1/faculties', {
+          institutionId: instB.id,
+          name: 'Faculty of Engineering',
+        });
+
+        const listedFac = await request(app.getHttpServer())
+          .get('/api/v1/faculties')
+          .query({ search: 'Engineering', sortBy: 'name', sortOrder: 'asc' })
+          .set('Cookie', staffOne.sessionCookie)
+          .expect(200);
+        expect(
+          (listedFac.body as { items: FacultyPayload[] }).items.map(
+            (f) => f.id,
+          ),
+        ).toEqual([facA.id, facB.id]);
+      } finally {
+        if (facA) {
+          await deleteResource(`/api/v1/faculties/${facA.id}`, facA.version);
+        }
+        if (facB) {
+          await deleteResource(`/api/v1/faculties/${facB.id}`, facB.version);
+        }
+        await deleteResource(`/api/v1/institutions/${instA.id}`, instA.version);
+        await deleteResource(`/api/v1/institutions/${instB.id}`, instB.version);
+      }
+    });
+
+    it('allows reparenting an unreferenced non-fixed faculty and blocks reparenting or deleting a referenced faculty', async () => {
+      const instA = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'E2E Reparent Source', institutionType: 'PUBLIC_UNIVERSITY' },
+      );
+      const instB = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'E2E Reparent Target', institutionType: 'PRIVATE_UNIVERSITY' },
+      );
+      let fac = await postResource<FacultyPayload>('/api/v1/faculties', {
+        institutionId: instA.id,
+        name: 'Faculty of Sciences',
+      });
+      let dept: DepartmentPayload | null = null;
+
+      try {
+        fac = await patchResource<FacultyPayload>(
+          `/api/v1/faculties/${fac.id}`,
+          { expectedVersion: fac.version, institutionId: instB.id },
+        );
+        expect(fac.institutionId).toBe(instB.id);
+        expect(fac.version).toBe(2);
+
+        dept = await postResource<DepartmentPayload>('/api/v1/departments', {
+          facultyId: fac.id,
+          name: 'Mathematics',
+        });
+
+        const blockedReparent = await request(app.getHttpServer())
+          .patch(`/api/v1/faculties/${fac.id}`)
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .send({ expectedVersion: fac.version, institutionId: instA.id })
+          .expect(409);
+        expect(blockedReparent.body).toMatchObject({ code: 'RECORD_IN_USE' });
+
+        fac = await patchResource<FacultyPayload>(
+          `/api/v1/faculties/${fac.id}`,
+          {
+            expectedVersion: fac.version,
+            name: 'Faculty of Applied Sciences',
+          },
+        );
+        expect(fac.version).toBe(3);
+        expect(fac.institutionId).toBe(instB.id);
+
+        const inUseDelete = await request(app.getHttpServer())
+          .delete(`/api/v1/faculties/${fac.id}?expectedVersion=${fac.version}`)
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .expect(409);
+        expect(inUseDelete.body).toMatchObject({ code: 'RECORD_IN_USE' });
+
+        await deleteResource(`/api/v1/departments/${dept.id}`, dept.version);
+        dept = null;
+
+        fac = await patchResource<FacultyPayload>(
+          `/api/v1/faculties/${fac.id}`,
+          { expectedVersion: fac.version, institutionId: instA.id },
+        );
+        expect(fac.institutionId).toBe(instA.id);
+        expect(fac.version).toBe(4);
+      } finally {
+        if (dept) {
+          await deleteResource(`/api/v1/departments/${dept.id}`, dept.version);
+        }
+        await deleteResource(`/api/v1/faculties/${fac.id}`, fac.version);
+        await deleteResource(`/api/v1/institutions/${instB.id}`, instB.version);
+        await deleteResource(`/api/v1/institutions/${instA.id}`, instA.version);
+      }
+    });
+
+    it('manages departments under fixed and non-fixed faculties with uniqueness and institution filtering', async () => {
+      const inst = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'Dept Test Univ', institutionType: 'PUBLIC_UNIVERSITY' },
+      );
+      const fac = await postResource<FacultyPayload>('/api/v1/faculties', {
+        institutionId: inst.id,
+        name: 'Faculty of Computing',
+      });
+      const deptFixed = await postResource<DepartmentPayload>(
+        '/api/v1/departments',
+        {
+          facultyId: FIXED_OFFICE.faculty.id,
+          name: 'Computer Science',
+        },
+      );
+      let deptA = await postResource<DepartmentPayload>('/api/v1/departments', {
+        facultyId: fac.id,
+        name: 'Systems Engineering',
+      });
+
+      try {
+        const dupDept = await request(app.getHttpServer())
+          .post('/api/v1/departments')
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .send({
+            facultyId: fac.id,
+            name: 'Systems Engineering',
+          })
+          .expect(409);
+        expect(dupDept.body).toMatchObject({ code: 'DEPARTMENT_NAME_EXISTS' });
+
+        const filteredDepts = await request(app.getHttpServer())
+          .get('/api/v1/departments')
+          .query({ institutionId: FIXED_OFFICE.institution.id })
+          .set('Cookie', staffTwo.sessionCookie)
+          .expect(200);
+        expect(
+          (filteredDepts.body as { items: DepartmentPayload[] }).items.map(
+            (d) => d.id,
+          ),
+        ).toEqual([deptFixed.id]);
+
+        deptA = await patchResource<DepartmentPayload>(
+          `/api/v1/departments/${deptA.id}`,
+          { expectedVersion: 1, name: 'Computer Engineering' },
+          staffTwo,
+        );
+        expect(deptA.version).toBe(2);
+      } finally {
+        await deleteResource(
+          `/api/v1/departments/${deptFixed.id}`,
+          deptFixed.version,
+        );
+        await deleteResource(`/api/v1/departments/${deptA.id}`, deptA.version);
+        await deleteResource(`/api/v1/faculties/${fac.id}`, fac.version);
+        await deleteResource(`/api/v1/institutions/${inst.id}`, inst.version);
+      }
+    });
+
+    it('serves newest-first paged read-only change history including deleted entries without leaking secrets', async () => {
+      const inst = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'History Target Univ', institutionType: 'PUBLIC_UNIVERSITY' },
+      );
+      const updated = await patchResource<InstitutionPayload>(
+        `/api/v1/institutions/${inst.id}`,
+        { expectedVersion: 1, name: 'History Target Univ Updated' },
+        staffTwo,
+      );
+      await deleteResource(
+        `/api/v1/institutions/${inst.id}`,
+        updated.version,
+        staffTwo,
+      );
+
       await request(app.getHttpServer())
-        .post(`/api/v1/institutions/${instB.id}/history`)
-        .set('Origin', staffOne.origin)
+        .get(`/api/v1/institutions/${inst.id}`)
         .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .send({})
         .expect(404);
 
-      // Never-existent record history returns 404
-      await request(app.getHttpServer())
-        .get('/api/v1/departments/999999/history')
-        .set('Cookie', staffOne.sessionCookie)
-        .expect(404);
+      const instOther = await postResource<InstitutionPayload>(
+        '/api/v1/institutions',
+        { name: 'Read Only History Probe', institutionType: 'OTHER' },
+      );
 
-      // Clean up remaining records created in this test
-      await request(app.getHttpServer())
-        .delete(
-          `/api/v1/departments/${deptFixed.id}?expectedVersion=${deptFixed.version}`,
-        )
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(204);
-      await request(app.getHttpServer())
-        .delete(`/api/v1/faculties/${facB.id}?expectedVersion=${facB.version}`)
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(204);
-      await request(app.getHttpServer())
-        .delete(
-          `/api/v1/institutions/${instB.id}?expectedVersion=${instB.version}`,
-        )
-        .set('Origin', staffOne.origin)
-        .set('Cookie', staffOne.sessionCookie)
-        .set('X-CSRF-Token', staffOne.csrfToken)
-        .expect(204);
+      try {
+        const historyPage1 = await request(app.getHttpServer())
+          .get(`/api/v1/institutions/${inst.id}/history`)
+          .query({ page: 1, pageSize: 2 })
+          .set('Cookie', staffOne.sessionCookie)
+          .expect(200);
+        const page1Body = historyPage1.body as {
+          items: HistoryPayload[];
+          total: number;
+          page: number;
+          pageSize: number;
+        };
+        expect(page1Body.total).toBe(3);
+        expect(page1Body.page).toBe(1);
+        expect(page1Body.pageSize).toBe(2);
+        expect(page1Body.items.map((item) => item.action)).toEqual([
+          'DELETED',
+          'UPDATED',
+        ]);
+        expect(page1Body.items[0]).toMatchObject({
+          recordType: 'EDUCATIONAL_INSTITUTION',
+          recordId: inst.id,
+          action: 'DELETED',
+          actorKind: 'STAFF',
+          staffUser: {
+            id: staffTwo.user.id,
+            username: staffTwo.user.username,
+            fullName: staffTwo.user.fullName,
+          },
+          after: null,
+        });
+        expect(JSON.stringify(page1Body)).not.toMatch(
+          /passwordHash|csrfSecret|credentialDigest|operationCorrelation/,
+        );
+
+        const historyPage2 = await request(app.getHttpServer())
+          .get(`/api/v1/institutions/${inst.id}/history`)
+          .query({ page: 2, pageSize: 2 })
+          .set('Cookie', staffTwo.sessionCookie)
+          .expect(200);
+        const page2Body = historyPage2.body as { items: HistoryPayload[] };
+        expect(page2Body.items.map((item) => item.action)).toEqual(['CREATED']);
+
+        await request(app.getHttpServer())
+          .post(`/api/v1/institutions/${instOther.id}/history`)
+          .set('Origin', staffOne.origin)
+          .set('Cookie', staffOne.sessionCookie)
+          .set('X-CSRF-Token', staffOne.csrfToken)
+          .send({})
+          .expect(404);
+
+        await request(app.getHttpServer())
+          .get('/api/v1/departments/999999/history')
+          .set('Cookie', staffOne.sessionCookie)
+          .expect(404);
+      } finally {
+        await deleteResource(
+          `/api/v1/institutions/${instOther.id}`,
+          instOther.version,
+        );
+      }
     });
 
     it('validates DTO bodies, query parameters, and route IDs strictly', async () => {
@@ -669,24 +736,47 @@ describe('reference catalog and fixed office (e2e)', () => {
       ]) {
         expect(doc.components.schemas[schemaName]).toBeDefined();
       }
+
+      const institutionSchema = doc.components.schemas[
+        'EducationalInstitutionDto'
+      ] as { properties?: Record<string, unknown> };
+      const facultySchema = doc.components.schemas['FacultyDto'] as {
+        properties?: Record<string, unknown>;
+      };
+      expect(institutionSchema.properties).not.toHaveProperty('isFixedOffice');
+      expect(facultySchema.properties).not.toHaveProperty('isFixedOffice');
     });
   });
 
   describe('startup fixed-office verification', () => {
-    it('fails startup when the fixed faculty is missing or conflicting', async () => {
+    it('fails startup when the fixed institution or faculty is missing or conflicting', async () => {
       const env = await createTestEnvironment();
       const admin = new Client({ connectionString: env.database.url });
       try {
         await admin.connect();
         await admin.query(
+          `UPDATE educational_institution SET name = 'Tampered University' WHERE id = 1`,
+        );
+        await expect(
+          createApplication({ config: loadAppConfig() }),
+        ).rejects.toThrow(/fixed/i);
+
+        await admin.query(
+          `UPDATE educational_institution SET name = 'Zagazig University' WHERE id = 1`,
+        );
+        await admin.query(
           `UPDATE faculty SET name = 'Tampered Faculty' WHERE id = 1`,
         );
-
         await expect(
           createApplication({ config: loadAppConfig() }),
         ).rejects.toThrow(/fixed/i);
 
         await admin.query(`DELETE FROM faculty WHERE id = 1`);
+        await expect(
+          createApplication({ config: loadAppConfig() }),
+        ).rejects.toThrow(/fixed/i);
+
+        await admin.query(`DELETE FROM educational_institution WHERE id = 1`);
         await expect(
           createApplication({ config: loadAppConfig() }),
         ).rejects.toThrow(/fixed/i);

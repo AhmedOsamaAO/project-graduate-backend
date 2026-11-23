@@ -1,11 +1,44 @@
+import type { PrismaService } from '../prisma/prisma.service';
 import {
   FIXED_OFFICE,
+  FixedOfficeStartupCheck,
   assertFixedOfficeHierarchy,
   isFixedFacultyId,
   isFixedInstitutionId,
 } from './fixed-office';
 
 describe('fixed office constants and startup check', () => {
+  it('verifies fixed office hierarchy via FixedOfficeStartupCheck on module init', async () => {
+    let facultyRow: {
+      id: number;
+      institutionId: number;
+      name: string;
+    } | null = {
+      id: 1,
+      institutionId: 1,
+      name: 'Faculty of Computer and Information',
+    };
+    const prisma = {
+      educationalInstitution: {
+        findUnique: () =>
+          Promise.resolve({
+            id: 1,
+            name: 'Zagazig University',
+            institutionType: 'PUBLIC_UNIVERSITY',
+          }),
+      },
+      faculty: {
+        findUnique: () => Promise.resolve(facultyRow),
+      },
+    } as unknown as PrismaService;
+
+    const startupCheck = new FixedOfficeStartupCheck(prisma);
+    await expect(startupCheck.onModuleInit()).resolves.toBeUndefined();
+
+    facultyRow = null;
+    await expect(startupCheck.onModuleInit()).rejects.toThrow(/fixed/i);
+  });
+
   it('identifies only the reserved fixed institution and faculty IDs', () => {
     expect(FIXED_OFFICE.institution).toEqual({
       id: 1,

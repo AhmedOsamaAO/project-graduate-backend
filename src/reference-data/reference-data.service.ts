@@ -1,9 +1,4 @@
-import {
-  HttpStatus,
-  Inject,
-  Injectable,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import {
   appendStaffRecordHistory,
   type ChangeHistoryEntryView,
@@ -11,51 +6,46 @@ import {
 } from '../change-history/change-history';
 import { ChangeHistoryService } from '../change-history/change-history.service';
 import { ApiError } from '../common/errors/api-error';
-import { ERROR_CODES } from '../common/errors/error-codes';
+import { ERROR_CODES, type ErrorCode } from '../common/errors/error-codes';
 import { createPage, type PageResult } from '../common/http/page';
-import {
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGE_SIZE,
-  type PageQueryDto,
-} from '../common/http/page-query.dto';
-import { MAX_POSTGRES_INT4 } from '../common/http/parse-positive-int.pipe';
-import { InstitutionType, type Prisma } from '../generated/prisma/client';
+import type { PageQueryDto } from '../common/http/page-query.dto';
+import type {
+  HistoryRecordType,
+  InstitutionType,
+  Prisma,
+} from '../generated/prisma/client';
 import {
   isForeignKeyConstraintError,
   isUniqueConstraintError,
 } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionRunner } from '../prisma/transaction-runner';
+import { isFixedFacultyId, isFixedInstitutionId } from './fixed-office';
 import {
-  assertFixedOfficeHierarchy,
-  isFixedFacultyId,
-  isFixedInstitutionId,
-} from './fixed-office';
+  FACULTY_AND_DEPARTMENT_SORT_FIELDS,
+  INSTITUTION_SORT_FIELDS,
+  buildOrderBy,
+  fixedRecordProtectedError,
+  normalizePagination,
+  notFoundError,
+  recordInUseError,
+  validateCatalogName,
+  validateInstitutionType,
+  validateOptionalSearch,
+  validatePositiveInt4,
+  validationError,
+  type CatalogSortField,
+  type InstitutionSortField,
+  type SortDirection,
+} from './reference-data.validation';
 import {
-  departmentSnapshot,
   departmentView,
-  facultySnapshot,
   facultyView,
-  institutionSnapshot,
   institutionView,
   type DepartmentView,
   type EducationalInstitutionView,
   type FacultyView,
 } from './reference-data.views';
-
-export const INSTITUTION_SORT_FIELDS = [
-  'name',
-  'institutionType',
-  'createdAt',
-  'id',
-] as const;
-export type InstitutionSortField = (typeof INSTITUTION_SORT_FIELDS)[number];
-
-export const CATALOG_SORT_FIELDS = ['name', 'createdAt', 'id'] as const;
-export type CatalogSortField = (typeof CATALOG_SORT_FIELDS)[number];
-
-export const SORT_DIRECTIONS = ['asc', 'desc'] as const;
-export type SortDirection = (typeof SORT_DIRECTIONS)[number];
 
 export interface ListInstitutionsInput {
   readonly page?: number;
@@ -118,10 +108,8 @@ export interface UpdateDepartmentInput {
   readonly name?: string;
 }
 
-const VALID_INSTITUTION_TYPES = new Set<string>(Object.values(InstitutionType));
-
 @Injectable()
-export class ReferenceDataService implements OnModuleInit {
+export class ReferenceDataService {
   private readonly transactions: TransactionRunner;
 
   constructor(
@@ -129,10 +117,6 @@ export class ReferenceDataService implements OnModuleInit {
     private readonly changeHistory: ChangeHistoryService,
   ) {
     this.transactions = new TransactionRunner(prisma);
-  }
-
-  async onModuleInit(): Promise<void> {
-    await assertFixedOfficeHierarchy(this.prisma);
   }
 
   async listInstitutions(
@@ -194,7 +178,7 @@ export class ReferenceDataService implements OnModuleInit {
           recordId: created.id,
           action: 'CREATED',
           before: null,
-          after: institutionSnapshot(created),
+          after: institutionView(created),
         });
         return institutionView(created);
       },
@@ -234,13 +218,7 @@ export class ReferenceDataService implements OnModuleInit {
       {
         lockAndFind: lockInstitution,
         notFoundMessage: 'Educational institution not found',
-        assertMutable: (row) => {
-          if (isFixedInstitutionId(row.id)) {
-            throw fixedRecordProtectedError(
-              'The fixed operating institution cannot be modified',
-            );
-          }
-        },
+        assertMutable: ensureInstitutionMutable,
         execute: async (tx, before, data) => {
           const after = await tx.educationalInstitution.update({
             where: { id: before.id },
@@ -256,8 +234,8 @@ export class ReferenceDataService implements OnModuleInit {
             recordType: 'EDUCATIONAL_INSTITUTION',
             recordId: after.id,
             action: 'UPDATED',
-            before: institutionSnapshot(before),
-            after: institutionSnapshot(after),
+            before: institutionView(before),
+            after: institutionView(after),
           });
           return institutionView(after);
         },
@@ -270,56 +248,27 @@ export class ReferenceDataService implements OnModuleInit {
     id: number,
     expectedVersion: number,
   ): Promise<void> {
-    const validId = validatePositiveInt4(id, 'id');
-    const validVersion = validatePositiveInt4(
-      expectedVersion,
-      'expectedVersion',
-    );
-
-    try {
-      await this.runVersionedMutation(validId, validVersion, undefined, {
-        lockAndFind: lockInstitution,
-        notFoundMessage: 'Educational institution not found',
-        assertMutable: (row) => {
-          if (isFixedInstitutionId(row.id)) {
-            throw fixedRecordProtectedError(
-              'The fixed operating institution cannot be deleted',
-            );
-          }
-        },
-        execute: async (tx, before) => {
-          await tx.educationalInstitution.delete({ where: { id: before.id } });
-          await appendStaffRecordHistory(tx, actor, {
-            recordType: 'EDUCATIONAL_INSTITUTION',
-            recordId: before.id,
-            action: 'DELETED',
-            before: institutionSnapshot(before),
-            after: null,
-          });
-        },
-      });
-    } catch (error: unknown) {
-      if (isForeignKeyConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.RECORD_IN_USE,
-          'Educational institution is still referenced and cannot be deleted',
-        );
-      }
-      throw error;
-    }
+    await this.deleteCatalogEntry(actor, id, expectedVersion, {
+      recordType: 'EDUCATIONAL_INSTITUTION',
+      lockAndFind: lockInstitution,
+      notFoundMessage: 'Educational institution not found',
+      assertMutable: ensureInstitutionMutable,
+      deleteRow: (tx, targetId) =>
+        tx.educationalInstitution.delete({ where: { id: targetId } }),
+      snapshot: institutionView,
+      inUseMessage:
+        'Educational institution is still referenced and cannot be deleted',
+    });
   }
 
-  async getInstitutionHistory(
+  getInstitutionHistory(
     id: number,
-    query: PageQueryDto,
+    query: Partial<Pick<PageQueryDto, 'page' | 'pageSize'>> = {},
   ): Promise<PageResult<ChangeHistoryEntryView>> {
-    const validId = validatePositiveInt4(id, 'id');
-    const pagination = normalizePagination(query);
-    return this.changeHistory.listRecordHistory(
+    return this.getCatalogHistory(
       'EDUCATIONAL_INSTITUTION',
-      validId,
-      pagination,
+      id,
+      query,
       async (recordId) =>
         (await this.prisma.educationalInstitution.findUnique({
           where: { id: recordId },
@@ -340,7 +289,7 @@ export class ReferenceDataService implements OnModuleInit {
     const orderBy = buildOrderBy(
       query.sortBy,
       query.sortOrder,
-      CATALOG_SORT_FIELDS,
+      FACULTY_AND_DEPARTMENT_SORT_FIELDS,
     );
     const where: Prisma.FacultyWhereInput = {
       ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
@@ -381,10 +330,9 @@ export class ReferenceDataService implements OnModuleInit {
     );
     const name = validateCatalogName(input.name, 'name');
 
-    try {
-      return await this.transactions.run(
-        { institutionId, name },
-        async (tx, data) => {
+    return this.mapConstraintErrors(
+      () =>
+        this.transactions.run({ institutionId, name }, async (tx, data) => {
           const institution = await tx.educationalInstitution.findUnique({
             where: { id: data.institutionId },
             select: { id: true },
@@ -399,24 +347,17 @@ export class ReferenceDataService implements OnModuleInit {
             recordId: created.id,
             action: 'CREATED',
             before: null,
-            after: facultySnapshot(created),
+            after: facultyView(created),
           });
           return facultyView(created);
-        },
-      );
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.FACULTY_NAME_EXISTS,
+        }),
+      {
+        uniqueCode: ERROR_CODES.FACULTY_NAME_EXISTS,
+        uniqueMessage:
           'A faculty with this name already exists in the institution',
-        );
-      }
-      if (isForeignKeyConstraintError(error)) {
-        throw notFoundError('Educational institution not found');
-      }
-      throw error;
-    }
+        missingParentMessage: 'Educational institution not found',
+      },
+    );
   }
 
   async updateFaculty(
@@ -445,70 +386,69 @@ export class ReferenceDataService implements OnModuleInit {
         ? validatePositiveInt4(input.institutionId, 'institutionId')
         : undefined;
 
-    try {
-      return await this.runVersionedMutation(
-        validId,
-        expectedVersion,
-        { name, institutionId },
-        {
-          lockAndFind: lockFaculty,
-          notFoundMessage: 'Faculty not found',
-          assertMutable: (row) => {
-            if (isFixedFacultyId(row.id)) {
-              throw fixedRecordProtectedError(
-                'The fixed operating faculty cannot be modified or reparented',
-              );
-            }
-          },
-          execute: async (tx, before, data) => {
-            if (
-              data.institutionId !== undefined &&
-              data.institutionId !== before.institutionId
-            ) {
-              const targetInstitution =
-                await tx.educationalInstitution.findUnique({
-                  where: { id: data.institutionId },
+    return this.mapConstraintErrors(
+      () =>
+        this.runVersionedMutation(
+          validId,
+          expectedVersion,
+          { name, institutionId },
+          {
+            lockAndFind: lockFaculty,
+            notFoundMessage: 'Faculty not found',
+            assertMutable: ensureFacultyMutable,
+            execute: async (tx, before, data) => {
+              if (
+                data.institutionId !== undefined &&
+                data.institutionId !== before.institutionId
+              ) {
+                const referencingDepartment = await tx.department.findFirst({
+                  where: { facultyId: before.id },
                   select: { id: true },
                 });
-              if (!targetInstitution) {
-                throw notFoundError('Educational institution not found');
-              }
-            }
+                if (referencingDepartment !== null) {
+                  throw recordInUseError(
+                    'Faculty is still referenced and cannot be reparented',
+                  );
+                }
 
-            const after = await tx.faculty.update({
-              where: { id: before.id },
-              data: {
-                ...(data.name !== undefined ? { name: data.name } : {}),
-                ...(data.institutionId !== undefined
-                  ? { institutionId: data.institutionId }
-                  : {}),
-                version: { increment: 1 },
-              },
-            });
-            await appendStaffRecordHistory(tx, actor, {
-              recordType: 'FACULTY',
-              recordId: after.id,
-              action: 'UPDATED',
-              before: facultySnapshot(before),
-              after: facultySnapshot(after),
-            });
-            return facultyView(after);
+                const targetInstitution =
+                  await tx.educationalInstitution.findUnique({
+                    where: { id: data.institutionId },
+                    select: { id: true },
+                  });
+                if (!targetInstitution) {
+                  throw notFoundError('Educational institution not found');
+                }
+              }
+
+              const after = await tx.faculty.update({
+                where: { id: before.id },
+                data: {
+                  ...(data.name !== undefined ? { name: data.name } : {}),
+                  ...(data.institutionId !== undefined
+                    ? { institutionId: data.institutionId }
+                    : {}),
+                  version: { increment: 1 },
+                },
+              });
+              await appendStaffRecordHistory(tx, actor, {
+                recordType: 'FACULTY',
+                recordId: after.id,
+                action: 'UPDATED',
+                before: facultyView(before),
+                after: facultyView(after),
+              });
+              return facultyView(after);
+            },
           },
-        },
-      );
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.FACULTY_NAME_EXISTS,
+        ),
+      {
+        uniqueCode: ERROR_CODES.FACULTY_NAME_EXISTS,
+        uniqueMessage:
           'A faculty with this name already exists in the institution',
-        );
-      }
-      if (isForeignKeyConstraintError(error)) {
-        throw notFoundError('Educational institution not found');
-      }
-      throw error;
-    }
+        missingParentMessage: 'Educational institution not found',
+      },
+    );
   }
 
   async deleteFaculty(
@@ -516,62 +456,29 @@ export class ReferenceDataService implements OnModuleInit {
     id: number,
     expectedVersion: number,
   ): Promise<void> {
-    const validId = validatePositiveInt4(id, 'id');
-    const validVersion = validatePositiveInt4(
-      expectedVersion,
-      'expectedVersion',
-    );
-
-    try {
-      await this.runVersionedMutation(validId, validVersion, undefined, {
-        lockAndFind: lockFaculty,
-        notFoundMessage: 'Faculty not found',
-        assertMutable: (row) => {
-          if (isFixedFacultyId(row.id)) {
-            throw fixedRecordProtectedError(
-              'The fixed operating faculty cannot be deleted',
-            );
-          }
-        },
-        execute: async (tx, before) => {
-          await tx.faculty.delete({ where: { id: before.id } });
-          await appendStaffRecordHistory(tx, actor, {
-            recordType: 'FACULTY',
-            recordId: before.id,
-            action: 'DELETED',
-            before: facultySnapshot(before),
-            after: null,
-          });
-        },
-      });
-    } catch (error: unknown) {
-      if (isForeignKeyConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.RECORD_IN_USE,
-          'Faculty is still referenced and cannot be deleted',
-        );
-      }
-      throw error;
-    }
+    await this.deleteCatalogEntry(actor, id, expectedVersion, {
+      recordType: 'FACULTY',
+      lockAndFind: lockFaculty,
+      notFoundMessage: 'Faculty not found',
+      assertMutable: ensureFacultyMutable,
+      deleteRow: (tx, targetId) =>
+        tx.faculty.delete({ where: { id: targetId } }),
+      snapshot: facultyView,
+      inUseMessage: 'Faculty is still referenced and cannot be deleted',
+    });
   }
 
-  async getFacultyHistory(
+  getFacultyHistory(
     id: number,
-    query: PageQueryDto,
+    query: Partial<Pick<PageQueryDto, 'page' | 'pageSize'>> = {},
   ): Promise<PageResult<ChangeHistoryEntryView>> {
-    const validId = validatePositiveInt4(id, 'id');
-    const pagination = normalizePagination(query);
-    return this.changeHistory.listRecordHistory(
-      'FACULTY',
-      validId,
-      pagination,
-      async (recordId) =>
-        (await this.prisma.faculty.findUnique({
-          where: { id: recordId },
-          select: { id: true },
-        })) !== null,
-    );
+    return this.getCatalogHistory('FACULTY', id, query, async (recordId) => {
+      const row = await this.prisma.faculty.findUnique({
+        where: { id: recordId },
+        select: { id: true },
+      });
+      return row !== null;
+    });
   }
 
   async listDepartments(
@@ -590,7 +497,7 @@ export class ReferenceDataService implements OnModuleInit {
     const orderBy = buildOrderBy(
       query.sortBy,
       query.sortOrder,
-      CATALOG_SORT_FIELDS,
+      FACULTY_AND_DEPARTMENT_SORT_FIELDS,
     );
     const where: Prisma.DepartmentWhereInput = {
       ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
@@ -629,10 +536,9 @@ export class ReferenceDataService implements OnModuleInit {
     const facultyId = validatePositiveInt4(input.facultyId, 'facultyId');
     const name = validateCatalogName(input.name, 'name');
 
-    try {
-      return await this.transactions.run(
-        { facultyId, name },
-        async (tx, data) => {
+    return this.mapConstraintErrors(
+      () =>
+        this.transactions.run({ facultyId, name }, async (tx, data) => {
           const faculty = await tx.faculty.findUnique({
             where: { id: data.facultyId },
             select: { id: true },
@@ -647,24 +553,17 @@ export class ReferenceDataService implements OnModuleInit {
             recordId: created.id,
             action: 'CREATED',
             before: null,
-            after: departmentSnapshot(created),
+            after: departmentView(created),
           });
           return departmentView(created);
-        },
-      );
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.DEPARTMENT_NAME_EXISTS,
+        }),
+      {
+        uniqueCode: ERROR_CODES.DEPARTMENT_NAME_EXISTS,
+        uniqueMessage:
           'A department with this name already exists in the faculty',
-        );
-      }
-      if (isForeignKeyConstraintError(error)) {
-        throw notFoundError('Faculty not found');
-      }
-      throw error;
-    }
+        missingParentMessage: 'Faculty not found',
+      },
+    );
   }
 
   async updateDepartment(
@@ -693,68 +592,109 @@ export class ReferenceDataService implements OnModuleInit {
         ? validatePositiveInt4(input.facultyId, 'facultyId')
         : undefined;
 
-    try {
-      return await this.runVersionedMutation(
-        validId,
-        expectedVersion,
-        { name, facultyId },
-        {
-          lockAndFind: lockDepartment,
-          notFoundMessage: 'Department not found',
-          execute: async (tx, before, data) => {
-            if (
-              data.facultyId !== undefined &&
-              data.facultyId !== before.facultyId
-            ) {
-              const targetFaculty = await tx.faculty.findUnique({
-                where: { id: data.facultyId },
-                select: { id: true },
-              });
-              if (!targetFaculty) {
-                throw notFoundError('Faculty not found');
+    return this.mapConstraintErrors(
+      () =>
+        this.runVersionedMutation(
+          validId,
+          expectedVersion,
+          { name, facultyId },
+          {
+            lockAndFind: lockDepartment,
+            notFoundMessage: 'Department not found',
+            execute: async (tx, before, data) => {
+              if (
+                data.facultyId !== undefined &&
+                data.facultyId !== before.facultyId
+              ) {
+                const targetFaculty = await tx.faculty.findUnique({
+                  where: { id: data.facultyId },
+                  select: { id: true },
+                });
+                if (!targetFaculty) {
+                  throw notFoundError('Faculty not found');
+                }
               }
-            }
 
-            const after = await tx.department.update({
-              where: { id: before.id },
-              data: {
-                ...(data.name !== undefined ? { name: data.name } : {}),
-                ...(data.facultyId !== undefined
-                  ? { facultyId: data.facultyId }
-                  : {}),
-                version: { increment: 1 },
-              },
-            });
-            await appendStaffRecordHistory(tx, actor, {
-              recordType: 'DEPARTMENT',
-              recordId: after.id,
-              action: 'UPDATED',
-              before: departmentSnapshot(before),
-              after: departmentSnapshot(after),
-            });
-            return departmentView(after);
+              const after = await tx.department.update({
+                where: { id: before.id },
+                data: {
+                  ...(data.name !== undefined ? { name: data.name } : {}),
+                  ...(data.facultyId !== undefined
+                    ? { facultyId: data.facultyId }
+                    : {}),
+                  version: { increment: 1 },
+                },
+              });
+              await appendStaffRecordHistory(tx, actor, {
+                recordType: 'DEPARTMENT',
+                recordId: after.id,
+                action: 'UPDATED',
+                before: departmentView(before),
+                after: departmentView(after),
+              });
+              return departmentView(after);
+            },
           },
-        },
-      );
-    } catch (error: unknown) {
-      if (isUniqueConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.DEPARTMENT_NAME_EXISTS,
+        ),
+      {
+        uniqueCode: ERROR_CODES.DEPARTMENT_NAME_EXISTS,
+        uniqueMessage:
           'A department with this name already exists in the faculty',
-        );
-      }
-      if (isForeignKeyConstraintError(error)) {
-        throw notFoundError('Faculty not found');
-      }
-      throw error;
-    }
+        missingParentMessage: 'Faculty not found',
+      },
+    );
   }
 
   async deleteDepartment(
     actor: StaffActor,
     id: number,
     expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteCatalogEntry(actor, id, expectedVersion, {
+      recordType: 'DEPARTMENT',
+      lockAndFind: lockDepartment,
+      notFoundMessage: 'Department not found',
+      deleteRow: (tx, targetId) =>
+        tx.department.delete({ where: { id: targetId } }),
+      snapshot: departmentView,
+      inUseMessage: 'Department is still referenced and cannot be deleted',
+    });
+  }
+
+  getDepartmentHistory(
+    id: number,
+    query: Partial<Pick<PageQueryDto, 'page' | 'pageSize'>> = {},
+  ): Promise<PageResult<ChangeHistoryEntryView>> {
+    return this.getCatalogHistory('DEPARTMENT', id, query, async (recordId) => {
+      const row = await this.prisma.department.findUnique({
+        where: { id: recordId },
+        select: { id: true },
+      });
+      return row !== null;
+    });
+  }
+
+  private async deleteCatalogEntry<
+    Row extends { readonly id: number; readonly version: number },
+  >(
+    actor: StaffActor,
+    id: number,
+    expectedVersion: number,
+    options: {
+      readonly recordType: HistoryRecordType;
+      readonly lockAndFind: (
+        tx: Prisma.TransactionClient,
+        id: number,
+      ) => Promise<Row | null>;
+      readonly notFoundMessage: string;
+      readonly assertMutable?: (row: Row) => void;
+      readonly deleteRow: (
+        tx: Prisma.TransactionClient,
+        id: number,
+      ) => Promise<unknown>;
+      readonly snapshot: (row: Row) => Prisma.InputJsonValue;
+      readonly inUseMessage: string;
+    },
   ): Promise<void> {
     const validId = validatePositiveInt4(id, 'id');
     const validVersion = validatePositiveInt4(
@@ -764,47 +704,67 @@ export class ReferenceDataService implements OnModuleInit {
 
     try {
       await this.runVersionedMutation(validId, validVersion, undefined, {
-        lockAndFind: lockDepartment,
-        notFoundMessage: 'Department not found',
+        lockAndFind: options.lockAndFind,
+        notFoundMessage: options.notFoundMessage,
+        assertMutable: options.assertMutable,
         execute: async (tx, before) => {
-          await tx.department.delete({ where: { id: before.id } });
+          await options.deleteRow(tx, before.id);
           await appendStaffRecordHistory(tx, actor, {
-            recordType: 'DEPARTMENT',
+            recordType: options.recordType,
             recordId: before.id,
             action: 'DELETED',
-            before: departmentSnapshot(before),
+            before: options.snapshot(before),
             after: null,
           });
         },
       });
     } catch (error: unknown) {
       if (isForeignKeyConstraintError(error)) {
-        throw new ApiError(
-          HttpStatus.CONFLICT,
-          ERROR_CODES.RECORD_IN_USE,
-          'Department is still referenced and cannot be deleted',
-        );
+        throw recordInUseError(options.inUseMessage);
       }
       throw error;
     }
   }
 
-  async getDepartmentHistory(
+  private getCatalogHistory(
+    recordType: HistoryRecordType,
     id: number,
-    query: PageQueryDto,
+    query: Partial<Pick<PageQueryDto, 'page' | 'pageSize'>>,
+    recordExists: (recordId: number) => Promise<boolean>,
   ): Promise<PageResult<ChangeHistoryEntryView>> {
     const validId = validatePositiveInt4(id, 'id');
     const pagination = normalizePagination(query);
     return this.changeHistory.listRecordHistory(
-      'DEPARTMENT',
+      recordType,
       validId,
       pagination,
-      async (recordId) =>
-        (await this.prisma.department.findUnique({
-          where: { id: recordId },
-          select: { id: true },
-        })) !== null,
+      recordExists,
     );
+  }
+
+  private async mapConstraintErrors<T>(
+    work: () => Promise<T>,
+    options: {
+      readonly uniqueCode: ErrorCode;
+      readonly uniqueMessage: string;
+      readonly missingParentMessage: string;
+    },
+  ): Promise<T> {
+    try {
+      return await work();
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        throw new ApiError(
+          HttpStatus.CONFLICT,
+          options.uniqueCode,
+          options.uniqueMessage,
+        );
+      }
+      if (isForeignKeyConstraintError(error)) {
+        throw notFoundError(options.missingParentMessage);
+      }
+      throw error;
+    }
   }
 
   private async runVersionedMutation<
@@ -821,11 +781,11 @@ export class ReferenceDataService implements OnModuleInit {
         id: number,
       ) => Promise<Row | null>;
       readonly notFoundMessage: string;
-      readonly assertMutable?: (row: Row) => void;
+      readonly assertMutable?: (row: NoInfer<Row>) => void;
       readonly execute: (
         tx: Prisma.TransactionClient,
-        before: Row,
-        payload: Payload,
+        before: NoInfer<Row>,
+        payload: NoInfer<Payload>,
       ) => Promise<Result>;
     },
   ): Promise<Result> {
@@ -865,125 +825,18 @@ async function lockDepartment(tx: Prisma.TransactionClient, id: number) {
   return tx.department.findUnique({ where: { id } });
 }
 
-function validateCatalogName(value: string, field: string): string {
-  if (typeof value !== 'string') {
-    throw validationError(field, `${field} must be a string`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 200 || hasControlChars(trimmed)) {
-    throw validationError(
-      field,
-      `${field} must contain 1–200 printable characters`,
+function ensureInstitutionMutable(row: { readonly id: number }): void {
+  if (isFixedInstitutionId(row.id)) {
+    throw fixedRecordProtectedError(
+      'The fixed operating institution cannot be modified or deleted',
     );
   }
-  return trimmed;
 }
 
-function validateOptionalSearch(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    throw validationError('search', 'search must be a string');
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.length > 200 || hasControlChars(trimmed)) {
-    throw validationError(
-      'search',
-      'search must contain at most 200 printable characters',
+function ensureFacultyMutable(row: { readonly id: number }): void {
+  if (isFixedFacultyId(row.id)) {
+    throw fixedRecordProtectedError(
+      'The fixed operating faculty cannot be modified, reparented, or deleted',
     );
   }
-  return trimmed;
-}
-
-function validatePositiveInt4(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_POSTGRES_INT4) {
-    throw validationError(field, `${field} must be a positive integer`);
-  }
-  return value;
-}
-
-function validateInstitutionType(value: InstitutionType): InstitutionType {
-  if (typeof value !== 'string' || !VALID_INSTITUTION_TYPES.has(value)) {
-    throw validationError(
-      'institutionType',
-      'institutionType must be a valid InstitutionType',
-    );
-  }
-  return value;
-}
-
-function normalizePagination(query: {
-  readonly page?: number;
-  readonly pageSize?: number;
-}): { readonly page: number; readonly pageSize: number } {
-  const page = query.page ?? 1;
-  const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
-  if (!Number.isSafeInteger(page) || page < 1 || page > MAX_POSTGRES_INT4) {
-    throw validationError('page', 'page must be a positive integer');
-  }
-  if (
-    !Number.isSafeInteger(pageSize) ||
-    pageSize < 1 ||
-    pageSize > MAX_PAGE_SIZE
-  ) {
-    throw validationError(
-      'pageSize',
-      `pageSize must be between 1 and ${MAX_PAGE_SIZE}`,
-    );
-  }
-  return { page, pageSize };
-}
-
-function buildOrderBy<Field extends string>(
-  sortBy: Field | undefined,
-  sortOrder: SortDirection | undefined,
-  allowedFields: readonly Field[],
-): Array<Record<string, SortDirection>> {
-  const field = sortBy ?? ('name' as Field);
-  if (!allowedFields.includes(field)) {
-    throw validationError('sortBy', 'Unsupported sortBy field');
-  }
-  const direction = sortOrder ?? 'asc';
-  if (direction !== 'asc' && direction !== 'desc') {
-    throw validationError('sortOrder', 'sortOrder must be asc or desc');
-  }
-  if (field === 'id') {
-    return [{ id: direction }];
-  }
-  return [{ [field]: direction }, { id: 'asc' }];
-}
-
-function hasControlChars(value: string): boolean {
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code < 32 || code === 127) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function validationError(field: string, message: string): ApiError {
-  return new ApiError(
-    HttpStatus.BAD_REQUEST,
-    ERROR_CODES.VALIDATION_ERROR,
-    'Validation failed',
-    [{ field, message }],
-  );
-}
-
-function notFoundError(message: string): ApiError {
-  return new ApiError(HttpStatus.NOT_FOUND, ERROR_CODES.NOT_FOUND, message);
-}
-
-function fixedRecordProtectedError(message: string): ApiError {
-  return new ApiError(
-    HttpStatus.CONFLICT,
-    ERROR_CODES.FIXED_RECORD_PROTECTED,
-    message,
-  );
 }

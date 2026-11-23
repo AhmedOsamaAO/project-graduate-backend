@@ -1,5 +1,6 @@
 import {
   isForeignKeyConstraintError,
+  isRetryableTransactionError,
   isUniqueConstraintError,
 } from './prisma-errors';
 
@@ -15,6 +16,7 @@ describe('prisma error helpers', () => {
   ])('recognizes unique constraint errors for %j', (shape) => {
     expect(isUniqueConstraintError(shape)).toBe(true);
     expect(isForeignKeyConstraintError(shape)).toBe(false);
+    expect(isRetryableTransactionError(shape)).toBe(false);
   });
 
   it.each([
@@ -31,6 +33,30 @@ describe('prisma error helpers', () => {
   ])('recognizes foreign key constraint errors for %j', (shape) => {
     expect(isForeignKeyConstraintError(shape)).toBe(true);
     expect(isUniqueConstraintError(shape)).toBe(false);
+    expect(isRetryableTransactionError(shape)).toBe(false);
+  });
+
+  it.each([
+    { code: 'P2034' },
+    { code: '40001' },
+    { code: '40P01' },
+    { cause: { originalCode: '40001' } },
+    { cause: { originalCode: '40P01' } },
+    { cause: { code: '40001' } },
+    { meta: { code: '40001' } },
+    { meta: { driverAdapterError: { cause: { originalCode: '40001' } } } },
+    { meta: { driverAdapterError: { cause: { originalCode: '40P01' } } } },
+    { meta: { driverAdapterError: { cause: { code: '40001' } } } },
+    { cause: { kind: 'TransactionWriteConflict' } },
+    {
+      meta: {
+        driverAdapterError: { cause: { kind: 'TransactionWriteConflict' } },
+      },
+    },
+  ])('recognizes retryable transaction conflicts for %j', (shape) => {
+    expect(isRetryableTransactionError(shape)).toBe(true);
+    expect(isUniqueConstraintError(shape)).toBe(false);
+    expect(isForeignKeyConstraintError(shape)).toBe(false);
   });
 
   it.each([null, undefined, 'string', {}, { code: 'P2025' }])(
@@ -38,6 +64,7 @@ describe('prisma error helpers', () => {
     (value) => {
       expect(isUniqueConstraintError(value)).toBe(false);
       expect(isForeignKeyConstraintError(value)).toBe(false);
+      expect(isRetryableTransactionError(value)).toBe(false);
     },
   );
 });

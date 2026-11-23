@@ -1,3 +1,4 @@
+import { applyDecorators } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -17,13 +18,14 @@ import { PageQueryDto } from '../../common/http/page-query.dto';
 import { MAX_POSTGRES_INT4 } from '../../common/http/parse-positive-int.pipe';
 import { InstitutionType } from '../../generated/prisma/client';
 import {
-  CATALOG_SORT_FIELDS,
+  FACULTY_AND_DEPARTMENT_SORT_FIELDS,
   INSTITUTION_SORT_FIELDS,
   SORT_DIRECTIONS,
+  hasControlCharacters,
   type CatalogSortField,
   type InstitutionSortField,
   type SortDirection,
-} from '../reference-data.service';
+} from '../reference-data.validation';
 
 function TrimString() {
   return Transform(({ value }: { value: unknown }) =>
@@ -50,16 +52,7 @@ function NoControlChars(validationOptions?: ValidationOptions) {
       options: validationOptions,
       validator: {
         validate(value: unknown): boolean {
-          if (typeof value !== 'string') {
-            return false;
-          }
-          for (const character of value) {
-            const code = character.charCodeAt(0);
-            if (code < 32 || code === 127) {
-              return false;
-            }
-          }
-          return true;
+          return typeof value === 'string' && !hasControlCharacters(value);
         },
         defaultMessage(args): string {
           return `${args?.property ?? 'value'} must not contain control characters`;
@@ -69,17 +62,88 @@ function NoControlChars(validationOptions?: ValidationOptions) {
   };
 }
 
+function PositiveInt4Field(options: {
+  readonly optional?: boolean;
+  readonly fromQuery?: boolean;
+  readonly example: number;
+}) {
+  const swagger = options.optional
+    ? ApiPropertyOptional({
+        minimum: 1,
+        maximum: MAX_POSTGRES_INT4,
+        example: options.example,
+      })
+    : ApiProperty({
+        minimum: 1,
+        maximum: MAX_POSTGRES_INT4,
+        example: options.example,
+      });
+
+  return applyDecorators(
+    swagger,
+    ...(options.optional
+      ? [ValidateIf((_obj, value) => value !== undefined)]
+      : []),
+    ...(options.fromQuery ? [Type(() => Number)] : []),
+    IsInt(),
+    Min(1),
+    Max(MAX_POSTGRES_INT4),
+  );
+}
+
+function CatalogNameField(options: {
+  readonly optional?: boolean;
+  readonly example: string;
+}) {
+  const swagger = options.optional
+    ? ApiPropertyOptional({ maxLength: 200, example: options.example })
+    : ApiProperty({ maxLength: 200, example: options.example });
+
+  return applyDecorators(
+    swagger,
+    ...(options.optional
+      ? [ValidateIf((_obj, value) => value !== undefined)]
+      : []),
+    TrimString(),
+    IsString(),
+    IsNotEmpty(),
+    MaxLength(200),
+    NoControlChars(),
+  );
+}
+
+function OptionalSearchField(description: string, example: string) {
+  return applyDecorators(
+    ApiPropertyOptional({ description, maxLength: 200, example }),
+    TrimOptionalSearch(),
+    ValidateIf((_obj, value) => value !== undefined),
+    IsString(),
+    MaxLength(200),
+    NoControlChars(),
+  );
+}
+
+function OptionalSortByField(allowedFields: readonly string[]) {
+  return applyDecorators(
+    ApiPropertyOptional({ enum: [...allowedFields], default: 'name' }),
+    ValidateIf((_obj, value) => value !== undefined),
+    IsIn(allowedFields),
+  );
+}
+
+function OptionalSortOrderField() {
+  return applyDecorators(
+    ApiPropertyOptional({ enum: SORT_DIRECTIONS, default: 'asc' }),
+    ValidateIf((_obj, value) => value !== undefined),
+    IsIn(SORT_DIRECTIONS),
+  );
+}
+
 export class ListInstitutionsQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({
-    description: 'Case-insensitive substring filter on institution name.',
-    maxLength: 200,
-    example: 'Cairo',
-  })
-  @TrimOptionalSearch()
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsString()
-  @MaxLength(200)
-  @NoControlChars()
+  @OptionalSearchField(
+    'Case-insensitive substring filter on institution name.',
+    'Cairo',
+  )
   search?: string;
 
   @ApiPropertyOptional({ enum: InstitutionType })
@@ -87,30 +151,15 @@ export class ListInstitutionsQueryDto extends PageQueryDto {
   @IsEnum(InstitutionType)
   institutionType?: InstitutionType;
 
-  @ApiPropertyOptional({
-    enum: INSTITUTION_SORT_FIELDS,
-    default: 'name',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(INSTITUTION_SORT_FIELDS)
+  @OptionalSortByField(INSTITUTION_SORT_FIELDS)
   sortBy?: InstitutionSortField;
 
-  @ApiPropertyOptional({
-    enum: SORT_DIRECTIONS,
-    default: 'asc',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(SORT_DIRECTIONS)
+  @OptionalSortOrderField()
   sortOrder?: SortDirection;
 }
 
 export class CreateInstitutionDto {
-  @ApiProperty({ maxLength: 200, example: 'Cairo University' })
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ example: 'Cairo University' })
   name!: string;
 
   @ApiProperty({
@@ -122,19 +171,10 @@ export class CreateInstitutionDto {
 }
 
 export class UpdateInstitutionDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ example: 1 })
   expectedVersion!: number;
 
-  @ApiPropertyOptional({ maxLength: 200, example: 'Cairo University' })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ optional: true, example: 'Cairo University' })
   name?: string;
 
   @ApiPropertyOptional({ enum: InstitutionType })
@@ -144,175 +184,82 @@ export class UpdateInstitutionDto {
 }
 
 export class ListFacultiesQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({
-    description: 'Case-insensitive substring filter on faculty name.',
-    maxLength: 200,
-    example: 'Engineering',
-  })
-  @TrimOptionalSearch()
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsString()
-  @MaxLength(200)
-  @NoControlChars()
+  @OptionalSearchField(
+    'Case-insensitive substring filter on faculty name.',
+    'Engineering',
+  )
   search?: string;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ optional: true, fromQuery: true, example: 1 })
   institutionId?: number;
 
-  @ApiPropertyOptional({
-    enum: CATALOG_SORT_FIELDS,
-    default: 'name',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(CATALOG_SORT_FIELDS)
+  @OptionalSortByField(FACULTY_AND_DEPARTMENT_SORT_FIELDS)
   sortBy?: CatalogSortField;
 
-  @ApiPropertyOptional({
-    enum: SORT_DIRECTIONS,
-    default: 'asc',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(SORT_DIRECTIONS)
+  @OptionalSortOrderField()
   sortOrder?: SortDirection;
 }
 
 export class CreateFacultyDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 2 })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ example: 2 })
   institutionId!: number;
 
-  @ApiProperty({ maxLength: 200, example: 'Faculty of Engineering' })
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ example: 'Faculty of Engineering' })
   name!: string;
 }
 
 export class UpdateFacultyDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ example: 1 })
   expectedVersion!: number;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 2 })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ optional: true, example: 2 })
   institutionId?: number;
 
-  @ApiPropertyOptional({ maxLength: 200, example: 'Faculty of Engineering' })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ optional: true, example: 'Faculty of Engineering' })
   name?: string;
 }
 
 export class ListDepartmentsQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({
-    description: 'Case-insensitive substring filter on department name.',
-    maxLength: 200,
-    example: 'Computer Science',
-  })
-  @TrimOptionalSearch()
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsString()
-  @MaxLength(200)
-  @NoControlChars()
+  @OptionalSearchField(
+    'Case-insensitive substring filter on department name.',
+    'Computer Science',
+  )
   search?: string;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ optional: true, fromQuery: true, example: 1 })
   facultyId?: number;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ optional: true, fromQuery: true, example: 1 })
   institutionId?: number;
 
-  @ApiPropertyOptional({
-    enum: CATALOG_SORT_FIELDS,
-    default: 'name',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(CATALOG_SORT_FIELDS)
+  @OptionalSortByField(FACULTY_AND_DEPARTMENT_SORT_FIELDS)
   sortBy?: CatalogSortField;
 
-  @ApiPropertyOptional({
-    enum: SORT_DIRECTIONS,
-    default: 'asc',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(SORT_DIRECTIONS)
+  @OptionalSortOrderField()
   sortOrder?: SortDirection;
 }
 
 export class CreateDepartmentDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ example: 1 })
   facultyId!: number;
 
-  @ApiProperty({ maxLength: 200, example: 'Computer Science' })
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ example: 'Computer Science' })
   name!: string;
 }
 
 export class UpdateDepartmentDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ example: 1 })
   expectedVersion!: number;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ optional: true, example: 1 })
   facultyId?: number;
 
-  @ApiPropertyOptional({ maxLength: 200, example: 'Information Technology' })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @TrimString()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  @NoControlChars()
+  @CatalogNameField({ optional: true, example: 'Information Technology' })
   name?: string;
 }
 
 export class DeleteCatalogEntryQueryDto {
-  @ApiProperty({ minimum: 1, maximum: MAX_POSTGRES_INT4, example: 1 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_POSTGRES_INT4)
+  @PositiveInt4Field({ fromQuery: true, example: 1 })
   expectedVersion!: number;
 }
 
@@ -328,9 +275,6 @@ export class EducationalInstitutionDto {
     example: InstitutionType.PUBLIC_UNIVERSITY,
   })
   institutionType!: InstitutionType;
-
-  @ApiProperty({ example: true })
-  isFixedOffice!: boolean;
 
   @ApiProperty({ example: 1 })
   version!: number;
@@ -351,9 +295,6 @@ export class FacultyDto {
 
   @ApiProperty({ example: 'Faculty of Computer and Information' })
   name!: string;
-
-  @ApiProperty({ example: true })
-  isFixedOffice!: boolean;
 
   @ApiProperty({ example: 1 })
   version!: number;

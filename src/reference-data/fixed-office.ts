@@ -1,4 +1,6 @@
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import type { PrismaClient } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Reserved identifiers and canonical attributes for the single operating office.
@@ -23,6 +25,15 @@ export function isFixedInstitutionId(id: number): boolean {
 
 export function isFixedFacultyId(id: number): boolean {
   return id === FIXED_OFFICE.faculty.id;
+}
+
+@Injectable()
+export class FixedOfficeStartupCheck implements OnModuleInit {
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  async onModuleInit(): Promise<void> {
+    await assertFixedOfficeHierarchy(this.prisma);
+  }
 }
 
 /** Refuses application startup when the fixed operating hierarchy is missing or altered. */

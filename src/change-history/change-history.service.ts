@@ -36,7 +36,7 @@ export class ChangeHistoryService {
   async listRecordHistory(
     recordType: HistoryRecordType,
     recordId: number,
-    query: PageQueryDto,
+    query: Pick<PageQueryDto, 'page' | 'pageSize'>,
     recordExists: (id: number) => Promise<boolean>,
   ): Promise<PageResult<ChangeHistoryEntryView>> {
     const where = { recordType, recordId };

@@ -1,4 +1,5 @@
 interface AdapterErrorCause {
+  readonly kind?: string;
   readonly code?: string;
   readonly originalCode?: string;
 }
@@ -32,8 +33,21 @@ function hasDatabaseCode(
   ].some((code) => code !== undefined && targets.has(code));
 }
 
+function hasDriverAdapterCauseKind(error: unknown, kind: string): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const candidate = error as PrismaErrorLike;
+  return (
+    candidate.cause?.kind === kind ||
+    candidate.meta?.driverAdapterError?.cause?.kind === kind
+  );
+}
+
 const UNIQUE_CONSTRAINT_CODES = new Set(['P2002', '23505']);
 const FOREIGN_KEY_CONSTRAINT_CODES = new Set(['P2003', '23503', '23001']);
+const RETRYABLE_TRANSACTION_CODES = new Set(['P2034', '40001', '40P01']);
 
 export function isUniqueConstraintError(error: unknown): boolean {
   return hasDatabaseCode(error, UNIQUE_CONSTRAINT_CODES);
@@ -41,4 +55,11 @@ export function isUniqueConstraintError(error: unknown): boolean {
 
 export function isForeignKeyConstraintError(error: unknown): boolean {
   return hasDatabaseCode(error, FOREIGN_KEY_CONSTRAINT_CODES);
+}
+
+export function isRetryableTransactionError(error: unknown): boolean {
+  return (
+    hasDatabaseCode(error, RETRYABLE_TRANSACTION_CODES) ||
+    hasDriverAdapterCauseKind(error, 'TransactionWriteConflict')
+  );
 }

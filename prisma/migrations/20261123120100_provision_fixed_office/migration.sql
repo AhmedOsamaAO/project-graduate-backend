@@ -51,13 +51,13 @@ BEGIN
 
   SELECT COALESCE(MAX(id), 1) INTO inst_max FROM educational_institution;
   SELECT last_value, is_called INTO seq_last, seq_called FROM educational_institution_id_seq;
-  IF NOT seq_called OR seq_last < inst_max THEN
+  IF seq_last < inst_max OR (NOT seq_called AND seq_last = inst_max) THEN
     PERFORM setval('educational_institution_id_seq', inst_max, true);
   END IF;
 
   SELECT COALESCE(MAX(id), 1) INTO fac_max FROM faculty;
   SELECT last_value, is_called INTO seq_last, seq_called FROM faculty_id_seq;
-  IF NOT seq_called OR seq_last < fac_max THEN
+  IF seq_last < fac_max OR (NOT seq_called AND seq_last = fac_max) THEN
     PERFORM setval('faculty_id_seq', fac_max, true);
   END IF;
 END $$;

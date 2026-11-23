@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import type { Prisma } from '../generated/prisma/client';
+import { isRetryableTransactionError } from './prisma-errors';
 
 export interface TransactionHost {
   $transaction<T>(
@@ -26,7 +27,7 @@ export class TransactionRunner {
           { isolationLevel: 'Serializable' },
         );
       } catch (error) {
-        if (!retryable(error)) throw error;
+        if (!isRetryableTransactionError(error)) throw error;
         if (attempt === 3) {
           throw new ApiError(
             HttpStatus.CONFLICT,
@@ -37,37 +38,4 @@ export class TransactionRunner {
       }
     }
   }
-}
-
-const RETRYABLE_SQLSTATES = new Set(['40001', '40P01']);
-
-interface AdapterErrorCause {
-  readonly kind?: string;
-  readonly code?: string;
-  readonly originalCode?: string;
-}
-
-function retryable(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const value = error as {
-    code?: string;
-    cause?: AdapterErrorCause;
-    meta?: {
-      code?: string;
-      driverAdapterError?: { cause?: AdapterErrorCause };
-    };
-  };
-  return (
-    value.code === 'P2034' ||
-    value.cause?.kind === 'TransactionWriteConflict' ||
-    value.meta?.driverAdapterError?.cause?.kind ===
-      'TransactionWriteConflict' ||
-    [
-      value.code,
-      value.cause?.originalCode,
-      value.cause?.code,
-      value.meta?.code,
-      value.meta?.driverAdapterError?.cause?.originalCode,
-    ].some((code) => code !== undefined && RETRYABLE_SQLSTATES.has(code))
-  );
 }

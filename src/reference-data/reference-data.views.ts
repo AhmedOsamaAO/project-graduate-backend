@@ -3,24 +3,24 @@ import type {
   EducationalInstitution,
   Faculty,
 } from '../generated/prisma/client';
-import { isFixedFacultyId, isFixedInstitutionId } from './fixed-office';
 
-export type InstitutionSnapshotSource = Pick<
+export type InstitutionViewSource = Pick<
   EducationalInstitution,
   'id' | 'name' | 'institutionType' | 'version' | 'createdAt' | 'updatedAt'
 >;
 
-export type FacultySnapshotSource = Pick<
+export type FacultyViewSource = Pick<
   Faculty,
   'id' | 'institutionId' | 'name' | 'version' | 'createdAt' | 'updatedAt'
 >;
 
-export type DepartmentSnapshotSource = Pick<
+export type DepartmentViewSource = Pick<
   Department,
   'id' | 'facultyId' | 'name' | 'version' | 'createdAt' | 'updatedAt'
 >;
 
-export function institutionSnapshot(row: InstitutionSnapshotSource) {
+/** Explicit allowlist used for both HTTP responses and change-history snapshots. */
+export function institutionView(row: InstitutionViewSource) {
   return {
     id: row.id,
     name: row.name,
@@ -31,18 +31,10 @@ export function institutionSnapshot(row: InstitutionSnapshotSource) {
   };
 }
 
-export type InstitutionSnapshot = ReturnType<typeof institutionSnapshot>;
-
-export function institutionView(row: InstitutionSnapshotSource) {
-  return {
-    ...institutionSnapshot(row),
-    isFixedOffice: isFixedInstitutionId(row.id),
-  };
-}
-
 export type EducationalInstitutionView = ReturnType<typeof institutionView>;
 
-export function facultySnapshot(row: FacultySnapshotSource) {
+/** Explicit allowlist used for both HTTP responses and change-history snapshots. */
+export function facultyView(row: FacultyViewSource) {
   return {
     id: row.id,
     institutionId: row.institutionId,
@@ -53,18 +45,10 @@ export function facultySnapshot(row: FacultySnapshotSource) {
   };
 }
 
-export type FacultySnapshot = ReturnType<typeof facultySnapshot>;
-
-export function facultyView(row: FacultySnapshotSource) {
-  return {
-    ...facultySnapshot(row),
-    isFixedOffice: isFixedFacultyId(row.id),
-  };
-}
-
 export type FacultyView = ReturnType<typeof facultyView>;
 
-export function departmentSnapshot(row: DepartmentSnapshotSource) {
+/** Explicit allowlist used for both HTTP responses and change-history snapshots. */
+export function departmentView(row: DepartmentViewSource) {
   return {
     id: row.id,
     facultyId: row.facultyId,
@@ -75,8 +59,4 @@ export function departmentSnapshot(row: DepartmentSnapshotSource) {
   };
 }
 
-export type DepartmentView = ReturnType<typeof departmentSnapshot>;
-
-export function departmentView(row: DepartmentSnapshotSource): DepartmentView {
-  return departmentSnapshot(row);
-}
+export type DepartmentView = ReturnType<typeof departmentView>;

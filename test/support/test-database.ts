@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
 const TEST_DATABASE_PREFIX = 'project_graduate_test_';
 const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const PROJECT_ROOT = join(__dirname, '..', '..');
+const PRISMA_CLI = join(PROJECT_ROOT, 'node_modules/prisma/build/index.js');
 
 export interface TestDatabase {
   readonly name: string;
@@ -76,6 +78,84 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   };
 }
 
+/**
+ * Creates a disposable database with only the named earlier migrations applied
+ * and marked resolved, so tests can insert pre-existing state before running
+ * `runPrismaDeploy`.
+ */
+export async function withPremigrationDatabase(
+  migrations: readonly string[],
+  work: (databaseUrl: string) => Promise<void>,
+): Promise<void> {
+  const serverUrl = testServerUrl();
+  const dbName = `${TEST_DATABASE_PREFIX}mig_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}`;
+  const adminUrl = databaseUrl(serverUrl, dbName);
+
+  await withAdminClient(serverUrl, (client) =>
+    client.query(`CREATE DATABASE ${quoteIdentifier(dbName)}`),
+  );
+
+  try {
+    await withAdminClient(adminUrl, async (client) => {
+      for (const migration of migrations) {
+        const sql = await readFile(
+          join(PROJECT_ROOT, 'prisma/migrations', migration, 'migration.sql'),
+          'utf8',
+        );
+        await client.query(sql);
+      }
+    });
+
+    for (const migration of migrations) {
+      const resolved = await spawnMigrationCommand(
+        process.execPath,
+        [
+          PRISMA_CLI,
+          'migrate',
+          'resolve',
+          '--applied',
+          migration,
+          '--config',
+          'prisma7.config.ts',
+        ],
+        adminUrl,
+      );
+      if (resolved.code !== 0) {
+        throw new Error(
+          `prisma migrate resolve failed for ${migration}: ${resolved.output}`,
+        );
+      }
+    }
+
+    await work(adminUrl);
+  } finally {
+    await dropTestDatabase(serverUrl, dbName).catch(() => undefined);
+  }
+}
+
+export async function runPrismaDeploy(
+  migrationDatabaseUrl: string,
+): Promise<{ code: number | null; output: string }> {
+  return spawnMigrationCommand(
+    NPM_COMMAND,
+    ['run', 'prisma:deploy', '--silent'],
+    migrationDatabaseUrl,
+  );
+}
+
+export async function withAdminClient<T>(
+  connectionString: string,
+  work: (client: Client) => Promise<T>,
+): Promise<T> {
+  const client = new Client({ connectionString });
+  await client.connect();
+  try {
+    return await work(client);
+  } finally {
+    await client.end();
+  }
+}
+
 function runtimeDatabaseUrl(
   serverUrl: string,
   name: string,
@@ -122,19 +202,6 @@ function databaseUrl(serverUrl: string, name: string): string {
   return url.toString();
 }
 
-async function withAdminClient<T>(
-  connectionString: string,
-  work: (client: Client) => Promise<T>,
-): Promise<T> {
-  const client = new Client({ connectionString });
-  await client.connect();
-  try {
-    return await work(client);
-  } finally {
-    await client.end();
-  }
-}
-
 async function dropTestDatabase(
   serverUrl: string,
   name: string,
@@ -150,12 +217,25 @@ async function dropTestDatabase(
 }
 
 async function migrate(databaseUrlValue: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(NPM_COMMAND, ['run', 'prisma:deploy', '--silent'], {
+  const result = await runPrismaDeploy(databaseUrlValue);
+  if (result.code !== 0) {
+    throw new Error(
+      `npm run prisma:deploy failed (exit ${result.code}).\n${result.output}`,
+    );
+  }
+}
+
+function spawnMigrationCommand(
+  command: string,
+  args: string[],
+  migrationDatabaseUrl: string,
+): Promise<{ code: number | null; output: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
       cwd: PROJECT_ROOT,
-      env: { ...process.env, MIGRATION_DATABASE_URL: databaseUrlValue },
+      env: { ...process.env, MIGRATION_DATABASE_URL: migrationDatabaseUrl },
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
+      shell: process.platform === 'win32' && command === NPM_COMMAND,
     });
 
     let output = '';
@@ -168,17 +248,7 @@ async function migrate(databaseUrlValue: string): Promise<void> {
       output += chunk;
     });
     child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `npm run prisma:deploy failed (${signal ?? `exit ${code}`}).\n${output}`,
-        ),
-      );
-    });
+    child.once('close', (code) => resolve({ code, output }));
   });
 }
 

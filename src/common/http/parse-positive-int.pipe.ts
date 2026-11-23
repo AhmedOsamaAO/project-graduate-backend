@@ -18,6 +18,9 @@ export class ParsePositiveIntPipe implements PipeTransform<
 > {
   transform(value: string | number, metadata: ArgumentMetadata): number {
     const field = metadata.data ?? 'id';
+    // Global ValidationPipe({ transform: true }) converts @Param() number
+    // values before route pipes execute, so both string and number inputs
+    // must be validated here.
     if (typeof value === 'number') {
       if (
         !Number.isSafeInteger(value) ||

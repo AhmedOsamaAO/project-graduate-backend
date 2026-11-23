@@ -51,17 +51,21 @@ export function ApiCommonErrorResponses() {
   );
 }
 
+function dataEnvelopeSchema(schema: Record<string, unknown>) {
+  return {
+    type: 'object',
+    required: ['data'],
+    properties: { data: schema },
+  };
+}
+
 export function ApiDataResponse(
   schema: Record<string, unknown>,
   description = 'Successful response',
 ) {
   return ApiOkResponse({
     description,
-    schema: {
-      type: 'object',
-      required: ['data'],
-      properties: { data: schema },
-    },
+    schema: dataEnvelopeSchema(schema),
   });
 }
 
@@ -71,11 +75,7 @@ export function ApiCreatedDataResponse(
 ) {
   return ApiCreatedResponse({
     description,
-    schema: {
-      type: 'object',
-      required: ['data'],
-      properties: { data: schema },
-    },
+    schema: dataEnvelopeSchema(schema),
   });
 }
 
