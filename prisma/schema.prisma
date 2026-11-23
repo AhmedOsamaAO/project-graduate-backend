@@ -13,6 +13,9 @@ datasource db {
 
 enum HistoryRecordType {
   STAFF_USER
+  EDUCATIONAL_INSTITUTION
+  FACULTY
+  DEPARTMENT
 
   @@map("history_record_type")
 }
@@ -24,6 +27,9 @@ enum HistoryAction {
   SIGN_IN
   SIGN_IN_FAILED
   PASSWORD_CHANGED
+  CREATED
+  UPDATED
+  DELETED
 
   @@map("history_action")
 }
@@ -34,6 +40,18 @@ enum HistoryActorKind {
   UNAUTHENTICATED
 
   @@map("history_actor_kind")
+}
+
+enum InstitutionType {
+  PUBLIC_UNIVERSITY
+  PRIVATE_UNIVERSITY
+  NATIONAL_UNIVERSITY
+  PRIVATE_INSTITUTE
+  PUBLIC_INSTITUTE
+  FOREIGN_INSTITUTION
+  OTHER
+
+  @@map("institution_type")
 }
 
 model StaffUser {
@@ -86,4 +104,47 @@ model ChangeHistory {
   @@index([recordType, recordId, occurredAt, id])
   @@index([staffUserId])
   @@map("change_history")
+}
+
+model EducationalInstitution {
+  id              Int             @id @default(autoincrement())
+  name            String          @db.VarChar(200)
+  institutionType InstitutionType @map("institution_type")
+  version         Int             @default(1)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  faculties       Faculty[]
+
+  @@index([institutionType])
+  @@index([name])
+  @@map("educational_institution")
+}
+
+model Faculty {
+  id            Int                    @id @default(autoincrement())
+  institutionId Int                    @map("institution_id")
+  name          String                 @db.VarChar(200)
+  version       Int                    @default(1)
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  institution   EducationalInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  departments   Department[]
+
+  @@unique([institutionId, name])
+  @@index([name])
+  @@map("faculty")
+}
+
+model Department {
+  id        Int      @id @default(autoincrement())
+  facultyId Int      @map("faculty_id")
+  name      String   @db.VarChar(200)
+  version   Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  faculty   Faculty  @relation(fields: [facultyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([facultyId, name])
+  @@index([name])
+  @@map("department")
 }
