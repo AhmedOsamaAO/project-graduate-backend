@@ -3,9 +3,11 @@ import { ERROR_CODES } from '../common/errors/error-codes';
 import { MilitaryStatus } from '../generated/prisma/client';
 import {
   buildStudentOrderBy,
+  extractNationalIdSearchDigits,
   normalizeArabicIndicDigits,
   normalizePagination,
   validateArchiveFilter,
+  validateMilitaryStatusFilter,
   validateOptionalAddress,
   validateOptionalBirthDate,
   validateOptionalMilitaryStatus,
@@ -152,15 +154,24 @@ describe('students.validation', () => {
           'Completed' as unknown as MilitaryStatus,
         ),
       ).toThrow(ApiError);
+      expect(validateMilitaryStatusFilter(undefined)).toBeUndefined();
+      expect(validateMilitaryStatusFilter(MilitaryStatus.POSTPONED)).toBe(
+        'POSTPONED',
+      );
+      expect(() =>
+        validateMilitaryStatusFilter(null as unknown as MilitaryStatus),
+      ).toThrow(ApiError);
     });
   });
 
   describe('search, filter, pagination, and sorting helpers', () => {
-    it('validates search and name filters', () => {
+    it('validates search and name filters and detects digit-only search terms', () => {
       expect(validateOptionalSearch(undefined)).toBeUndefined();
       expect(validateOptionalSearch('   ')).toBeUndefined();
       expect(validateOptionalSearch('  ٠٠١٢  ')).toBe('٠٠١٢');
       expect(() => validateOptionalSearch('x'.repeat(201))).toThrow(ApiError);
+      expect(extractNationalIdSearchDigits('٠٠١٢')).toBe('0012');
+      expect(extractNationalIdSearchDigits('أحمد')).toBeNull();
 
       expect(validateOptionalNameFilter('  سارة  ')).toBe('سارة');
       expect(validateOptionalNameFilter('   ')).toBeUndefined();

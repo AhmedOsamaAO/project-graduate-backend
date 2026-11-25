@@ -22,10 +22,9 @@ import {
   assertStudentActiveInTransaction,
 } from './student-archive-guard';
 import {
-  STUDENT_NATIONAL_ID_SEARCH_PATTERN,
   archivedStudentNationalIdError,
   buildStudentOrderBy,
-  normalizeArabicIndicDigits,
+  extractNationalIdSearchDigits,
   normalizePagination,
   notFoundError,
   studentAlreadyArchivedError,
@@ -33,6 +32,7 @@ import {
   studentNationalIdExistsError,
   studentNotArchivedError,
   validateArchiveFilter,
+  validateMilitaryStatusFilter,
   validateOptionalAddress,
   validateOptionalBirthDate,
   validateOptionalMilitaryStatus,
@@ -123,16 +123,7 @@ export class StudentsService {
     const search = validateOptionalSearch(query.search);
     const fullName = validateOptionalNameFilter(query.fullName);
     const nationalId = validateOptionalNationalIdFilter(query.nationalId);
-    const militaryStatus =
-      query.militaryStatus !== undefined
-        ? (validateOptionalMilitaryStatus(query.militaryStatus) ?? undefined)
-        : undefined;
-    if (query.militaryStatus === null) {
-      throw validationError(
-        'militaryStatus',
-        'militaryStatus must be COMPLETED, EXEMPTED, or POSTPONED',
-      );
-    }
+    const militaryStatus = validateMilitaryStatusFilter(query.militaryStatus);
     const archiveStatus = validateArchiveFilter(query.archiveStatus);
     const orderBy = buildStudentOrderBy(query.sortBy, query.sortOrder);
 
@@ -157,8 +148,8 @@ export class StudentsService {
       conditions.push({ militaryStatus });
     }
     if (search !== undefined) {
-      const normalizedDigits = normalizeArabicIndicDigits(search);
-      if (STUDENT_NATIONAL_ID_SEARCH_PATTERN.test(normalizedDigits)) {
+      const normalizedDigits = extractNationalIdSearchDigits(search);
+      if (normalizedDigits !== null) {
         conditions.push({
           OR: [
             { fullName: { contains: search, mode: 'insensitive' } },
@@ -464,15 +455,9 @@ export class StudentsService {
     const existing = await tx.student.findUnique({
       where: { nationalId },
     });
-    if (!existing) {
-      return;
+    if (existing) {
+      throw this.buildNationalIdConflict(existing);
     }
-    if (existing.archivedAt !== null) {
-      throw archivedStudentNationalIdError(
-        archivedStudentConflictDetails(existing),
-      );
-    }
-    throw studentNationalIdExistsError();
   }
 
   private async mapNationalIdUniqueConflict<T>(
@@ -488,13 +473,17 @@ export class StudentsService {
       const existing = await this.prisma.student.findUnique({
         where: { nationalId },
       });
-      if (existing && existing.archivedAt !== null) {
-        throw archivedStudentNationalIdError(
-          archivedStudentConflictDetails(existing),
-        );
-      }
-      throw studentNationalIdExistsError();
+      throw this.buildNationalIdConflict(existing);
     }
+  }
+
+  private buildNationalIdConflict(existing: Student | null): ApiError {
+    if (existing && existing.archivedAt !== null) {
+      return archivedStudentNationalIdError(
+        archivedStudentConflictDetails(existing),
+      );
+    }
+    return studentNationalIdExistsError();
   }
 
   private async runVersionedMutation<Payload, Result>(

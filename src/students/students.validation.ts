@@ -182,12 +182,22 @@ export function validateOptionalBirthDate(
 export function validateOptionalMilitaryStatus(
   value: MilitaryStatus | null | undefined,
 ): MilitaryStatus | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return validateMilitaryStatusValue(value);
+}
+
+export function validateMilitaryStatusFilter(
+  value: MilitaryStatus | undefined,
+): MilitaryStatus | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (value === null) {
-    return null;
-  }
+  return validateMilitaryStatusValue(value);
+}
+
+function validateMilitaryStatusValue(value: MilitaryStatus): MilitaryStatus {
   if (typeof value !== 'string' || !VALID_MILITARY_STATUSES.has(value)) {
     throw validationError(
       'militaryStatus',
@@ -195,6 +205,13 @@ export function validateOptionalMilitaryStatus(
     );
   }
   return value;
+}
+
+export function extractNationalIdSearchDigits(search: string): string | null {
+  const normalized = normalizeArabicIndicDigits(search);
+  return STUDENT_NATIONAL_ID_SEARCH_PATTERN.test(normalized)
+    ? normalized
+    : null;
 }
 
 export function validateOptionalSearch(
