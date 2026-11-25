@@ -7,6 +7,7 @@ import type { AppConfig } from './config/app-config';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReferenceDataModule } from './reference-data/reference-data.module';
 import { StaffAccessModule } from './staff-access/staff-access.module';
+import { StudentsModule } from './students/students.module';
 
 @Module({})
 export class AppModule {
@@ -19,6 +20,7 @@ export class AppModule {
         ChangeHistoryModule,
         StaffAccessModule,
         ReferenceDataModule,
+        StudentsModule,
       ],
       controllers: [AppController],
       providers: [AppService],

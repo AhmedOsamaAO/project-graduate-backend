@@ -16,6 +16,7 @@ enum HistoryRecordType {
   EDUCATIONAL_INSTITUTION
   FACULTY
   DEPARTMENT
+  STUDENT
 
   @@map("history_record_type")
 }
@@ -30,6 +31,8 @@ enum HistoryAction {
   CREATED
   UPDATED
   DELETED
+  ARCHIVED
+  RESTORED
 
   @@map("history_action")
 }
@@ -52,6 +55,14 @@ enum InstitutionType {
   OTHER
 
   @@map("institution_type")
+}
+
+enum MilitaryStatus {
+  COMPLETED
+  EXEMPTED
+  POSTPONED
+
+  @@map("military_status")
 }
 
 model StaffUser {
@@ -147,4 +158,23 @@ model Department {
   @@unique([facultyId, name])
   @@index([name])
   @@map("department")
+}
+
+model Student {
+  id                      Int             @id @default(autoincrement())
+  fullName                String          @map("full_name") @db.VarChar(200)
+  nationalId              String          @unique @map("national_id") @db.VarChar(14)
+  phone                   String?         @db.VarChar(50)
+  birthDate               DateTime?       @map("birth_date") @db.Date
+  address                 String?         @db.VarChar(500)
+  militaryStatus          MilitaryStatus? @map("military_status")
+  selectedPhotoDocumentId Int?            @map("selected_photo_document_id")
+  archivedAt              DateTime?       @map("archived_at") @db.Timestamptz(3)
+  version                 Int             @default(1)
+  createdAt               DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([archivedAt, id])
+  @@index([fullName])
+  @@map("student")
 }
