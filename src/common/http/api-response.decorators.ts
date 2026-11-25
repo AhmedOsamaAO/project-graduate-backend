@@ -1,5 +1,6 @@
 import { applyDecorators } from '@nestjs/common';
 import {
+  ApiCreatedResponse,
   ApiExtraModels,
   ApiOkResponse,
   ApiProperty,
@@ -50,16 +51,49 @@ export function ApiCommonErrorResponses() {
   );
 }
 
+function dataEnvelopeSchema(schema: Record<string, unknown>) {
+  return {
+    type: 'object',
+    required: ['data'],
+    properties: { data: schema },
+  };
+}
+
 export function ApiDataResponse(
   schema: Record<string, unknown>,
   description = 'Successful response',
 ) {
   return ApiOkResponse({
     description,
+    schema: dataEnvelopeSchema(schema),
+  });
+}
+
+export function ApiCreatedDataResponse(
+  schema: Record<string, unknown>,
+  description = 'Resource created',
+) {
+  return ApiCreatedResponse({
+    description,
+    schema: dataEnvelopeSchema(schema),
+  });
+}
+
+export function ApiPageResponse(
+  itemSchema: Record<string, unknown>,
+  description = 'Paged response',
+) {
+  return ApiOkResponse({
+    description,
     schema: {
       type: 'object',
-      required: ['data'],
-      properties: { data: schema },
+      required: ['items', 'total', 'page', 'pageSize'],
+      properties: {
+        items: { type: 'array', items: itemSchema },
+        total: { type: 'integer', example: 1 },
+        page: { type: 'integer', example: 1 },
+        pageSize: { type: 'integer', example: 20 },
+      },
     },
   });
 }

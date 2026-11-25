@@ -1,5 +1,10 @@
 import { Prisma } from '../generated/prisma/client';
-import type { HistoryAction, StaffUser } from '../generated/prisma/client';
+import type {
+  HistoryAction,
+  HistoryActorKind,
+  HistoryRecordType,
+  StaffUser,
+} from '../generated/prisma/client';
 
 export interface OperatorActor {
   readonly attribution: string;
@@ -96,4 +101,50 @@ export async function appendFailedSignInHistory(
       after: Prisma.DbNull,
     },
   });
+}
+
+export interface StaffRecordHistoryEntry {
+  readonly recordType: HistoryRecordType;
+  readonly recordId: number;
+  readonly action: HistoryAction;
+  readonly before: Prisma.InputJsonValue | null;
+  readonly after: Prisma.InputJsonValue | null;
+}
+
+/** Appends a staff-attributed domain record change inside the owning transaction. */
+export async function appendStaffRecordHistory(
+  tx: Prisma.TransactionClient,
+  actor: StaffActor,
+  entry: StaffRecordHistoryEntry,
+): Promise<void> {
+  await tx.changeHistory.create({
+    data: {
+      recordType: entry.recordType,
+      recordId: entry.recordId,
+      action: entry.action,
+      actorKind: 'STAFF',
+      staffUserId: actor.staffUserId,
+      before: entry.before === null ? Prisma.DbNull : entry.before,
+      after: entry.after === null ? Prisma.DbNull : entry.after,
+    },
+  });
+}
+
+export interface HistoryStaffActorView {
+  readonly id: number;
+  readonly username: string;
+  readonly fullName: string;
+}
+
+export interface ChangeHistoryEntryView {
+  readonly id: number;
+  readonly recordType: HistoryRecordType;
+  readonly recordId: number | null;
+  readonly action: HistoryAction;
+  readonly actorKind: HistoryActorKind;
+  readonly staffUser: HistoryStaffActorView | null;
+  readonly operatorAttribution: string | null;
+  readonly occurredAt: string;
+  readonly before: unknown;
+  readonly after: unknown;
 }
