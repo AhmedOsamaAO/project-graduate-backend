@@ -109,6 +109,7 @@ export interface StaffRecordHistoryEntry {
   readonly action: HistoryAction;
   readonly before: Prisma.InputJsonValue | null;
   readonly after: Prisma.InputJsonValue | null;
+  readonly operationCorrelation?: string | null;
 }
 
 /** Appends a staff-attributed domain record change inside the owning transaction. */
@@ -126,6 +127,9 @@ export async function appendStaffRecordHistory(
       staffUserId: actor.staffUserId,
       before: entry.before === null ? Prisma.DbNull : entry.before,
       after: entry.after === null ? Prisma.DbNull : entry.after,
+      ...(entry.operationCorrelation !== undefined
+        ? { operationCorrelation: entry.operationCorrelation }
+        : {}),
     },
   });
 }

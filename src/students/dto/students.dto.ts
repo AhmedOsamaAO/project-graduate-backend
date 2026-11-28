@@ -4,12 +4,16 @@ import { Transform } from 'class-transformer';
 import {
   IsEnum,
   IsIn,
+  IsInt,
   IsNotEmpty,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
   ValidateIf,
 } from 'class-validator';
+import { MAX_POSTGRES_INT4 } from '../../common/http/parse-positive-int.pipe';
 import { PageQueryDto } from '../../common/http/page-query.dto';
 import { MilitaryStatus } from '../../generated/prisma/client';
 import {
@@ -237,6 +241,26 @@ export class UpdateStudentDto {
 export class StudentVersionActionDto {
   @PositiveInt4Field(1)
   expectedVersion!: number;
+}
+
+export class SetStudentSelectedPhotoDto {
+  @PositiveInt4Field(1)
+  expectedVersion!: number;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    minimum: 1,
+    maximum: MAX_POSTGRES_INT4,
+    example: 10,
+    description:
+      'Unarchived, available PERSONAL_PHOTO document ID owned by this student, or null to clear.',
+  })
+  @ValidateIf((_obj, value) => value !== null)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_POSTGRES_INT4)
+  documentId!: number | null;
 }
 
 export class StudentDto {

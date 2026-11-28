@@ -2,8 +2,11 @@ import { ChangeHistoryService } from '../change-history/change-history.service';
 import { ApiError } from '../common/errors/api-error';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import {
+  DocumentAvailability,
+  DocumentType,
   MilitaryStatus,
   Prisma,
+  type Document,
   type HistoryAction,
   type HistoryActorKind,
   type HistoryRecordType,
@@ -44,8 +47,10 @@ function createFakeStudentsPrisma() {
 
   let state = {
     students: [] as Student[],
+    documents: [] as Document[],
     history: [] as HistoryRow[],
     nextStudentId: 1,
+    nextDocumentId: 1,
     nextHistoryId: 1,
   };
 
@@ -234,6 +239,7 @@ function createFakeStudentsPrisma() {
           birthDate?: Date | null;
           address?: string | null;
           militaryStatus?: MilitaryStatus | null;
+          selectedPhotoDocumentId?: number | null;
           archivedAt?: Date | null;
           version?: { increment: number };
         };
@@ -264,6 +270,10 @@ function createFakeStudentsPrisma() {
             data.militaryStatus !== undefined
               ? data.militaryStatus
               : current.militaryStatus,
+          selectedPhotoDocumentId:
+            data.selectedPhotoDocumentId !== undefined
+              ? data.selectedPhotoDocumentId
+              : current.selectedPhotoDocumentId,
           archivedAt:
             data.archivedAt !== undefined
               ? data.archivedAt
@@ -273,6 +283,12 @@ function createFakeStudentsPrisma() {
         };
         working.students[index] = updated;
         return Promise.resolve(structuredClone(updated));
+      },
+    },
+    document: {
+      findUnique: ({ where }: { where: { id: number } }) => {
+        const found = getWorking().documents.find((row) => row.id === where.id);
+        return Promise.resolve(found ? structuredClone(found) : null);
       },
     },
     changeHistory: {
@@ -381,6 +397,34 @@ function createFakeStudentsPrisma() {
     prisma,
     getStudents: () => state.students,
     getHistory: () => state.history,
+    addDocument: (
+      overrides: Partial<Document> & {
+        studentId: number;
+        documentType: DocumentType;
+      },
+    ): Document => {
+      const now = nextTimestamp();
+      const doc: Document = {
+        id: state.nextDocumentId++,
+        studentId: overrides.studentId,
+        qualificationId: overrides.qualificationId ?? null,
+        documentType: overrides.documentType,
+        originalFileName: overrides.originalFileName ?? 'photo.jpg',
+        storageKey: overrides.storageKey ?? 'a'.repeat(64),
+        mimeType: overrides.mimeType ?? 'image/jpeg',
+        byteSize: overrides.byteSize ?? 1024,
+        uploadedAt: overrides.uploadedAt ?? now,
+        archivedAt: overrides.archivedAt ?? null,
+        availability: overrides.availability ?? DocumentAvailability.AVAILABLE,
+        deletedAt: overrides.deletedAt ?? null,
+        deletedByStaffUserId: overrides.deletedByStaffUserId ?? null,
+        version: overrides.version ?? 1,
+        createdAt: overrides.createdAt ?? now,
+        updatedAt: overrides.updatedAt ?? now,
+      };
+      state.documents.push(doc);
+      return doc;
+    },
     forceNextCreateError: (error: Error) => {
       forcedStudentMutationError = error;
     },
@@ -707,5 +751,157 @@ describe('StudentsService', () => {
     await expect(
       service.archiveStudent(actor, archived.id, archived.version),
     ).rejects.toMatchObject({ code: ERROR_CODES.STUDENT_ALREADY_ARCHIVED });
+  });
+
+  it('selects, changes, and clears a student personal photo while enforcing ownership, category, availability, archive, and version rules', async () => {
+    const student = await service.createStudent(actor, {
+      fullName: 'Sara Hassan',
+      nationalId: '30303031234567',
+    });
+    const other = await service.createStudent(actor, {
+      fullName: 'Other Student',
+      nationalId: '30404041234567',
+    });
+
+    const photo1 = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      storageKey: '1'.repeat(64),
+    });
+    const photo2 = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      storageKey: '2'.repeat(64),
+    });
+    const nonPhoto = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.NATIONAL_ID,
+      storageKey: '3'.repeat(64),
+    });
+    const archivedPhoto = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      archivedAt: new Date('2026-11-26T10:00:00.000Z'),
+      storageKey: '4'.repeat(64),
+    });
+    const unavailablePhoto = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      archivedAt: new Date('2026-11-26T10:00:00.000Z'),
+      availability: DocumentAvailability.DELETE_PENDING,
+      storageKey: '5'.repeat(64),
+    });
+    const otherStudentPhoto = fakeDb.addDocument({
+      studentId: other.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      storageKey: '6'.repeat(64),
+    });
+
+    // Reject missing, wrong owner, non-photo, archived, unavailable, stale version
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: student.version,
+        documentId: 9999,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.NOT_FOUND });
+
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: student.version,
+        documentId: otherStudentPhoto.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.DOCUMENT_OWNER_MISMATCH });
+
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: student.version,
+        documentId: nonPhoto.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.INVALID_SELECTED_PHOTO });
+
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: student.version,
+        documentId: archivedPhoto.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.DOCUMENT_ARCHIVED });
+
+    // Unarchived-but-unavailable (e.g., DELETE_PENDING) photo check
+    const pendingPhoto = fakeDb.addDocument({
+      studentId: student.id,
+      documentType: DocumentType.PERSONAL_PHOTO,
+      availability: DocumentAvailability.DELETE_PENDING,
+      storageKey: '7'.repeat(64),
+    });
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: student.version,
+        documentId: pendingPhoto.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.DOCUMENT_UNAVAILABLE });
+    expect(unavailablePhoto.id).toBeGreaterThan(0);
+
+    // Select photo1
+    const selected1 = await service.setSelectedPhoto(actor, student.id, {
+      expectedVersion: student.version,
+      documentId: photo1.id,
+    });
+    expect(selected1).toMatchObject({
+      id: student.id,
+      selectedPhotoDocumentId: photo1.id,
+      version: 2,
+    });
+
+    // Stale version fails
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: 1,
+        documentId: photo2.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.STALE_VERSION });
+
+    // Switch to photo2
+    const selected2 = await service.setSelectedPhoto(actor, student.id, {
+      expectedVersion: selected1.version,
+      documentId: photo2.id,
+    });
+    expect(selected2).toMatchObject({
+      selectedPhotoDocumentId: photo2.id,
+      version: 3,
+    });
+
+    // Clear selected photo
+    const cleared = await service.setSelectedPhoto(actor, student.id, {
+      expectedVersion: selected2.version,
+      documentId: null,
+    });
+    expect(cleared).toMatchObject({
+      selectedPhotoDocumentId: null,
+      version: 4,
+    });
+
+    // Archived student blocks changing selected photo
+    const archivedStudent = await service.archiveStudent(
+      actor,
+      student.id,
+      cleared.version,
+    );
+    await expect(
+      service.setSelectedPhoto(actor, student.id, {
+        expectedVersion: archivedStudent.version,
+        documentId: photo1.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.STUDENT_ARCHIVED });
+
+    const history = await service.getStudentHistory(student.id, {
+      includeArchived: true,
+    });
+    expect(history.items.map((item) => item.action)).toEqual([
+      'ARCHIVED',
+      'UPDATED',
+      'UPDATED',
+      'UPDATED',
+      'CREATED',
+    ]);
   });
 });

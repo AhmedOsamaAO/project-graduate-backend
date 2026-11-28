@@ -24,9 +24,13 @@ import {
 import {
   archivedStudentNationalIdError,
   buildStudentOrderBy,
+  documentOwnerMismatchError,
   extractNationalIdSearchDigits,
+  invalidSelectedPhotoError,
   normalizePagination,
   notFoundError,
+  selectedPhotoDocumentArchivedError,
+  selectedPhotoDocumentUnavailableError,
   studentAlreadyArchivedError,
   studentArchivedError,
   studentNationalIdExistsError,
@@ -93,6 +97,11 @@ export interface UpdateStudentInput {
   readonly birthDate?: string | null;
   readonly address?: string | null;
   readonly militaryStatus?: MilitaryStatus | null;
+}
+
+export interface SetStudentSelectedPhotoInput {
+  readonly expectedVersion: number;
+  readonly documentId: number | null;
 }
 
 export interface StudentHistoryQueryInput extends Partial<
@@ -408,6 +417,87 @@ export class StudentsService {
           recordType: 'STUDENT',
           recordId: after.id,
           action: 'RESTORED',
+          before: studentView(before),
+          after: studentView(after),
+        });
+        return studentView(after);
+      },
+    );
+  }
+
+  async setSelectedPhoto(
+    actor: StaffActor,
+    id: number,
+    input: SetStudentSelectedPhotoInput,
+  ): Promise<StudentView> {
+    const validId = validatePositiveInt4(id, 'id');
+    const validVersion = validatePositiveInt4(
+      input.expectedVersion,
+      'expectedVersion',
+    );
+    if (input.documentId === undefined) {
+      throw validationError(
+        'documentId',
+        'documentId must be a positive integer or null',
+      );
+    }
+    const validDocumentId =
+      input.documentId === null
+        ? null
+        : validatePositiveInt4(input.documentId, 'documentId');
+
+    return this.runVersionedMutation(
+      validId,
+      validVersion,
+      { documentId: validDocumentId },
+      async (tx, before, data) => {
+        if (before.archivedAt !== null) {
+          throw studentArchivedError(
+            'Archived student must be restored before changing selected photo',
+          );
+        }
+
+        if (data.documentId !== null) {
+          await tx.$queryRaw`SELECT id FROM document WHERE id = ${data.documentId} FOR SHARE`;
+          const doc = await tx.document.findUnique({
+            where: { id: data.documentId },
+            select: {
+              id: true,
+              studentId: true,
+              documentType: true,
+              archivedAt: true,
+              availability: true,
+            },
+          });
+          if (!doc) {
+            throw notFoundError('Document not found');
+          }
+          if (doc.studentId !== before.id) {
+            throw documentOwnerMismatchError();
+          }
+          if (doc.documentType !== 'PERSONAL_PHOTO') {
+            throw invalidSelectedPhotoError();
+          }
+          if (doc.availability !== 'AVAILABLE') {
+            throw selectedPhotoDocumentUnavailableError();
+          }
+          if (doc.archivedAt !== null) {
+            throw selectedPhotoDocumentArchivedError();
+          }
+        }
+
+        const after = await tx.student.update({
+          where: { id: before.id },
+          data: {
+            selectedPhotoDocumentId: data.documentId,
+            version: { increment: 1 },
+          },
+        });
+
+        await appendStaffRecordHistory(tx, actor, {
+          recordType: 'STUDENT',
+          recordId: after.id,
+          action: 'UPDATED',
           before: studentView(before),
           after: studentView(after),
         });

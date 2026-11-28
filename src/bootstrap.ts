@@ -50,7 +50,8 @@ export function configureApplication(
     origin: [...config.frontendOrigins],
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'Idempotency-Key'],
+    exposedHeaders: ['Content-Disposition', 'X-File-Operation-Id'],
   });
   app.useGlobalPipes(
     new ValidationPipe({

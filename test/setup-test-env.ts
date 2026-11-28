@@ -15,6 +15,8 @@ const testDefaults: Readonly<Record<string, string>> = {
   SESSION_ABSOLUTE_TIMEOUT_DAYS: '7',
   SESSION_CLEANUP_INTERVAL_MINUTES: '15',
   UPLOAD_MAX_BYTES: String(10 * 1024 * 1024),
+  FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS: '60',
+  FILE_OPERATION_LEASE_SECONDS: '120',
 };
 
 for (const [name, value] of Object.entries(testDefaults)) {

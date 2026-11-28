@@ -55,6 +55,8 @@ describe('loadAppConfig', () => {
       sessionCleanupIntervalMinutes: 15,
       privateStorageRoot: '/tmp/project-graduate-storage',
       uploadMaxBytes: 10485760,
+      fileOperationReconciliationIntervalSeconds: 60,
+      fileOperationLeaseSeconds: 120,
     });
   });
 
@@ -66,6 +68,8 @@ describe('loadAppConfig', () => {
     delete env.SESSION_ABSOLUTE_TIMEOUT_DAYS;
     delete env.PRIVATE_STORAGE_ROOT;
     delete env.UPLOAD_MAX_BYTES;
+    delete env.FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS;
+    delete env.FILE_OPERATION_LEASE_SECONDS;
 
     const config = loadAppConfig(env);
 
@@ -76,6 +80,8 @@ describe('loadAppConfig', () => {
     expect(config.sessionCleanupIntervalMinutes).toBe(15);
     expect(config.privateStorageRoot).toBe(resolve(process.cwd(), 'storage'));
     expect(config.uploadMaxBytes).toBe(10 * 1024 * 1024);
+    expect(config.fileOperationReconciliationIntervalSeconds).toBe(60);
+    expect(config.fileOperationLeaseSeconds).toBe(120);
   });
 
   it('accepts explicit production loopback and secure settings', () => {
@@ -147,6 +153,10 @@ describe('loadAppConfig', () => {
     ['SESSION_CLEANUP_INTERVAL_MINUTES', '0'],
     ['SESSION_CLEANUP_INTERVAL_MINUTES', '1441'],
     ['UPLOAD_MAX_BYTES', '-1'],
+    ['FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS', '0'],
+    ['FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS', '3601'],
+    ['FILE_OPERATION_LEASE_SECONDS', '4'],
+    ['FILE_OPERATION_LEASE_SECONDS', '3601'],
     ['COOKIE_SECURE', 'sometimes'],
   ])('rejects an invalid %s', (name, value) => {
     expect(() => loadAppConfig({ ...validEnv(), [name]: value })).toThrow(
