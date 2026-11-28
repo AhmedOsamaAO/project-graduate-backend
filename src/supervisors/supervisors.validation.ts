@@ -9,7 +9,6 @@ import {
   type Prisma,
 } from '../generated/prisma/client';
 import {
-  hasControlCharacters,
   validateOptionalNullableText,
   validateOptionalQueryText,
   validatePositiveInt4,
@@ -142,23 +141,7 @@ export function validateOptionalSupervisorNameFilter(
 export function validateOptionalSupervisorNationalIdFilter(
   value: string | undefined,
 ): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    throw validationError('nationalId', 'nationalId must be a string');
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.length > 50 || hasControlCharacters(trimmed)) {
-    throw validationError(
-      'nationalId',
-      'nationalId filter must contain 1–50 printable characters',
-    );
-  }
-  return trimmed;
+  return validateOptionalQueryText(value, 'nationalId', 50);
 }
 
 export function validateSupervisorActivityFilter(

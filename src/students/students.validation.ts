@@ -93,6 +93,7 @@ export function validateOptionalNullableText(
 export function validateOptionalQueryText(
   value: string | undefined,
   field: string,
+  maxLength = 200,
 ): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -104,10 +105,10 @@ export function validateOptionalQueryText(
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.length > 200 || hasControlCharacters(trimmed)) {
+  if (trimmed.length > maxLength || hasControlCharacters(trimmed)) {
     throw validationError(
       field,
-      `${field} must contain at most 200 printable characters`,
+      `${field} must contain at most ${maxLength} printable characters`,
     );
   }
   return trimmed;

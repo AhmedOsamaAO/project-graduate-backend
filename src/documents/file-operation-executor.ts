@@ -96,6 +96,15 @@ type UploadTarget =
   | { readonly ownerKind: 'STUDENT'; readonly studentId: number }
   | { readonly ownerKind: 'SUPERVISOR'; readonly supervisorId: number };
 
+function toOwnerColumns(target: UploadTarget): {
+  readonly studentId: number | null;
+  readonly supervisorId: number | null;
+} {
+  return target.ownerKind === 'STUDENT'
+    ? { studentId: target.studentId, supervisorId: null }
+    : { studentId: null, supervisorId: target.supervisorId };
+}
+
 @Injectable()
 export class FileOperationExecutor
   implements OnModuleInit, OnModuleDestroy, BeforeApplicationShutdown
@@ -426,14 +435,7 @@ export class FileOperationExecutor
           kind: FileOperationKind.UPLOAD,
           status: FileOperationStatus.IN_PROGRESS,
           requestedByStaffUserId: input.actor.staffUserId,
-          studentId:
-            input.target.ownerKind === 'STUDENT'
-              ? input.target.studentId
-              : null,
-          supervisorId:
-            input.target.ownerKind === 'SUPERVISOR'
-              ? input.target.supervisorId
-              : null,
+          ...toOwnerColumns(input.target),
           idempotencyKey: input.idempotencyKey,
           stagingKey: input.stagingKey,
           storageKey: input.storageKey,
@@ -475,13 +477,10 @@ export class FileOperationExecutor
       received,
     );
 
-    const expectedStudentId =
-      target.ownerKind === 'STUDENT' ? target.studentId : null;
-    const expectedSupervisorId =
-      target.ownerKind === 'SUPERVISOR' ? target.supervisorId : null;
+    const expectedOwner = toOwnerColumns(target);
     if (
-      existing.studentId !== expectedStudentId ||
-      existing.supervisorId !== expectedSupervisorId
+      existing.studentId !== expectedOwner.studentId ||
+      existing.supervisorId !== expectedOwner.supervisorId
     ) {
       throw idempotencyKeyConflictError();
     }
@@ -634,14 +633,7 @@ export class FileOperationExecutor
 
         const created = await tx.document.create({
           data: {
-            studentId:
-              input.target.ownerKind === 'STUDENT'
-                ? input.target.studentId
-                : null,
-            supervisorId:
-              input.target.ownerKind === 'SUPERVISOR'
-                ? input.target.supervisorId
-                : null,
+            ...toOwnerColumns(input.target),
             qualificationId: input.received.qualificationId,
             documentType: input.received.documentType,
             description: input.received.description,
@@ -938,9 +930,7 @@ export class FileOperationExecutor
     received: ReceivedUploadFile,
   ): string {
     return computeUploadRequestFingerprint({
-      studentId: target.ownerKind === 'STUDENT' ? target.studentId : null,
-      supervisorId:
-        target.ownerKind === 'SUPERVISOR' ? target.supervisorId : null,
+      ...toOwnerColumns(target),
       documentType: received.documentType,
       qualificationId: received.qualificationId,
       description: received.description,

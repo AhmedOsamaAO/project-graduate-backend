@@ -262,7 +262,7 @@ export class SupervisorsService {
             tx,
             data.departmentId,
             data.affiliation,
-            true,
+            null,
           );
         }
 
@@ -363,7 +363,7 @@ export class SupervisorsService {
             tx,
             affiliationFields.departmentId,
             affiliationFields.affiliation,
-            affiliationFields.departmentId !== data.departmentId,
+            data.departmentId ?? null,
           );
         }
 
@@ -604,9 +604,9 @@ async function validateDepartmentForAffiliationInTx(
   tx: Prisma.TransactionClient,
   departmentId: number,
   affiliation: SupervisorAffiliation,
-  acquireShareLock: boolean,
+  preLockedDepartmentId: number | null,
 ): Promise<void> {
-  if (acquireShareLock) {
+  if (departmentId !== preLockedDepartmentId) {
     await tx.$queryRaw`SELECT id FROM department WHERE id = ${departmentId} FOR SHARE`;
   }
   const department = await tx.department.findUnique({

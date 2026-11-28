@@ -41,7 +41,33 @@ import {
   type DocumentSortField,
 } from '../documents.validation';
 
-export class ListStudentDocumentsQueryDto extends PageQueryDto {
+class BaseListDocumentsQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({
+    enum: DOCUMENT_ARCHIVE_FILTERS,
+    default: 'ACTIVE',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(DOCUMENT_ARCHIVE_FILTERS)
+  archiveStatus?: DocumentArchiveFilter;
+
+  @ApiPropertyOptional({
+    enum: DOCUMENT_SORT_FIELDS,
+    default: 'uploadedAt',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(DOCUMENT_SORT_FIELDS)
+  sortBy?: DocumentSortField;
+
+  @ApiPropertyOptional({
+    enum: SORT_DIRECTIONS,
+    default: 'desc',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(SORT_DIRECTIONS)
+  sortOrder?: SortDirection;
+}
+
+export class ListStudentDocumentsQueryDto extends BaseListDocumentsQueryDto {
   @ApiPropertyOptional({ enum: STUDENT_DOCUMENT_TYPES })
   @ValidateIf((_obj, value) => value !== undefined)
   @IsIn(STUDENT_DOCUMENT_TYPES)
@@ -70,14 +96,6 @@ export class ListStudentDocumentsQueryDto extends PageQueryDto {
   @Max(MAX_POSTGRES_INT4)
   qualificationId?: number;
 
-  @ApiPropertyOptional({
-    enum: DOCUMENT_ARCHIVE_FILTERS,
-    default: 'ACTIVE',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(DOCUMENT_ARCHIVE_FILTERS)
-  archiveStatus?: DocumentArchiveFilter;
-
   @OptionalIncludeArchivedField(
     'Include documents when the owning student record is archived.',
   )
@@ -87,49 +105,9 @@ export class ListStudentDocumentsQueryDto extends PageQueryDto {
     'Include documents linked to an archived qualification record.',
   )
   includeArchivedQualification?: boolean;
-
-  @ApiPropertyOptional({
-    enum: DOCUMENT_SORT_FIELDS,
-    default: 'uploadedAt',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(DOCUMENT_SORT_FIELDS)
-  sortBy?: DocumentSortField;
-
-  @ApiPropertyOptional({
-    enum: SORT_DIRECTIONS,
-    default: 'desc',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(SORT_DIRECTIONS)
-  sortOrder?: SortDirection;
 }
 
-export class ListSupervisorDocumentsQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({
-    enum: DOCUMENT_ARCHIVE_FILTERS,
-    default: 'ACTIVE',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(DOCUMENT_ARCHIVE_FILTERS)
-  archiveStatus?: DocumentArchiveFilter;
-
-  @ApiPropertyOptional({
-    enum: DOCUMENT_SORT_FIELDS,
-    default: 'uploadedAt',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(DOCUMENT_SORT_FIELDS)
-  sortBy?: DocumentSortField;
-
-  @ApiPropertyOptional({
-    enum: SORT_DIRECTIONS,
-    default: 'desc',
-  })
-  @ValidateIf((_obj, value) => value !== undefined)
-  @IsIn(SORT_DIRECTIONS)
-  sortOrder?: SortDirection;
-}
+export class ListSupervisorDocumentsQueryDto extends BaseListDocumentsQueryDto {}
 
 export class GetDocumentQueryDto {
   @OptionalIncludeArchivedField(
