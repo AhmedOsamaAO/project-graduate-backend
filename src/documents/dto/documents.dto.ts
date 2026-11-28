@@ -23,6 +23,7 @@ import {
   NoControlChars,
   OptionalIncludeArchivedField,
   OptionalNullablePositiveInt4Field,
+  OptionalNullableTextField,
   PositiveInt4Field,
   TrimString,
 } from '../../students/dto/dto-decorators';
@@ -34,15 +35,16 @@ import {
   DOCUMENT_ARCHIVE_FILTERS,
   DOCUMENT_DOWNLOAD_DISPOSITIONS,
   DOCUMENT_SORT_FIELDS,
+  STUDENT_DOCUMENT_TYPES,
   type DocumentArchiveFilter,
   type DocumentDownloadDisposition,
   type DocumentSortField,
 } from '../documents.validation';
 
 export class ListStudentDocumentsQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({ enum: DocumentType })
+  @ApiPropertyOptional({ enum: STUDENT_DOCUMENT_TYPES })
   @ValidateIf((_obj, value) => value !== undefined)
-  @IsEnum(DocumentType)
+  @IsIn(STUDENT_DOCUMENT_TYPES)
   documentType?: DocumentType;
 
   @ApiPropertyOptional({
@@ -103,6 +105,32 @@ export class ListStudentDocumentsQueryDto extends PageQueryDto {
   sortOrder?: SortDirection;
 }
 
+export class ListSupervisorDocumentsQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({
+    enum: DOCUMENT_ARCHIVE_FILTERS,
+    default: 'ACTIVE',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(DOCUMENT_ARCHIVE_FILTERS)
+  archiveStatus?: DocumentArchiveFilter;
+
+  @ApiPropertyOptional({
+    enum: DOCUMENT_SORT_FIELDS,
+    default: 'uploadedAt',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(DOCUMENT_SORT_FIELDS)
+  sortBy?: DocumentSortField;
+
+  @ApiPropertyOptional({
+    enum: SORT_DIRECTIONS,
+    default: 'desc',
+  })
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(SORT_DIRECTIONS)
+  sortOrder?: SortDirection;
+}
+
 export class GetDocumentQueryDto {
   @OptionalIncludeArchivedField(
     'Include an archived document or one under an archived student or qualification.',
@@ -141,7 +169,7 @@ export class UpdateDocumentDto {
   @OptionalNullablePositiveInt4Field({
     example: 1,
     description:
-      'Optional qualification belonging to the same student, or null to unlink.',
+      'Optional qualification belonging to the same student, or null to unlink (student documents only).',
   })
   qualificationId?: number | null;
 
@@ -149,6 +177,12 @@ export class UpdateDocumentDto {
   @ValidateIf((_obj, value) => value !== undefined)
   @IsEnum(DocumentType)
   documentType?: DocumentType;
+
+  @OptionalNullableTextField({
+    maxLength: 500,
+    example: 'External supervision CV and institutional approval memo',
+  })
+  description?: string | null;
 }
 
 export class DocumentVersionActionDto {
@@ -178,8 +212,11 @@ export class DocumentDto {
   @ApiProperty({ example: 1 })
   id!: number;
 
-  @ApiProperty({ example: 1 })
-  studentId!: number;
+  @ApiProperty({ type: Number, nullable: true, example: 1 })
+  studentId!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true, example: null })
+  supervisorId!: number | null;
 
   @ApiProperty({ type: Number, nullable: true, example: 1 })
   qualificationId!: number | null;
@@ -189,6 +226,9 @@ export class DocumentDto {
     example: DocumentType.BACHELOR_CERTIFICATE,
   })
   documentType!: DocumentType;
+
+  @ApiProperty({ type: String, nullable: true, example: null })
+  description!: string | null;
 
   @ApiProperty({ example: 'bachelor-certificate.pdf' })
   originalFileName!: string;
@@ -250,8 +290,11 @@ export class FileOperationDto {
   })
   status!: FileOperationStatus;
 
-  @ApiProperty({ example: 1 })
-  studentId!: number;
+  @ApiProperty({ type: Number, nullable: true, example: 1 })
+  studentId!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true, example: null })
+  supervisorId!: number | null;
 
   @ApiProperty({ type: Number, nullable: true, example: 10 })
   documentId!: number | null;

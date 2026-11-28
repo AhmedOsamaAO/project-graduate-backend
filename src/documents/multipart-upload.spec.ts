@@ -5,6 +5,8 @@ import { DocumentType } from '../generated/prisma/client';
 import {
   createBufferUploadSource,
   createMultipartUploadSource,
+  createSupervisorBufferUploadSource,
+  createSupervisorMultipartUploadSource,
 } from './multipart-upload';
 
 function buildMultipartRequest(
@@ -198,5 +200,45 @@ describe('multipart upload receiver and buffer upload source', () => {
         512,
       ),
     ).rejects.toMatchObject({ code: ERROR_CODES.FILE_TOO_LARGE });
+  });
+
+  it('supports supervisor multipart and buffer uploads with optional description and generic category', async () => {
+    const fileData = Buffer.from('supervisor-cv-bytes', 'utf8');
+    const req = buildMultipartRequest([
+      { name: 'description', value: '  Approved external supervision CV  ' },
+      { name: 'file', filename: 'cv.pdf', data: fileData },
+    ]);
+
+    const result = await createSupervisorMultipartUploadSource(
+      req,
+    ).streamToStaging(() => Promise.resolve(), 1024);
+    expect(result).toMatchObject({
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      qualificationId: null,
+      description: 'Approved external supervision CV',
+      originalFileName: 'cv.pdf',
+      byteSize: fileData.length,
+    });
+
+    const badQualReq = buildMultipartRequest([
+      { name: 'qualificationId', value: '1' },
+      { name: 'file', filename: 'cv.pdf', data: fileData },
+    ]);
+    await expect(
+      createSupervisorMultipartUploadSource(badQualReq).streamToStaging(
+        () => Promise.resolve(),
+        1024,
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.VALIDATION_ERROR });
+
+    const buffered = await createSupervisorBufferUploadSource({
+      originalFileName: 'supporting.pdf',
+      content: fileData,
+    }).hashWithoutStoring(1024);
+    expect(buffered).toMatchObject({
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      qualificationId: null,
+      description: null,
+    });
   });
 });

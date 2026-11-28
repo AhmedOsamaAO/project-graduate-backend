@@ -8,16 +8,20 @@ import { ERROR_CODES } from '../common/errors/error-codes';
 import type { DocumentType } from '../generated/prisma/client';
 import { validationError } from '../students/students.validation';
 import {
+  parseMultipartDescription,
   parseMultipartQualificationId,
   sanitizeOriginalFileName,
   uploadInterruptedError,
-  validateDocumentType,
+  validateOptionalDocumentDescription,
   validateOptionalQualificationId,
+  validateStudentDocumentType,
+  validateSupervisorDocumentType,
 } from './documents.validation';
 
 export interface ReceivedUploadFile {
   readonly documentType: DocumentType;
   readonly qualificationId: number | null;
+  readonly description: string | null;
   readonly originalFileName: string;
   readonly byteSize: number;
   readonly contentSha256: string;
@@ -38,17 +42,59 @@ export interface BufferUploadSourceInput {
   readonly content: Buffer | Readable;
 }
 
+export interface SupervisorBufferUploadSourceInput {
+  readonly documentType?: DocumentType;
+  readonly description?: string | null;
+  readonly originalFileName: string;
+  readonly content: Buffer | Readable;
+}
+
+type MultipartUploadMode = 'STUDENT' | 'SUPERVISOR';
+
 const MAX_MULTIPART_FIELDS = 10;
 const MAX_MULTIPART_FIELD_BYTES = 16 * 1024;
 
 export function createBufferUploadSource(
   input: BufferUploadSourceInput,
 ): UploadSource {
-  const documentType = validateDocumentType(input.documentType);
+  const documentType = validateStudentDocumentType(input.documentType);
   const qualificationId =
     validateOptionalQualificationId(input.qualificationId) ?? null;
   const originalFileName = sanitizeOriginalFileName(input.originalFileName);
 
+  return buildBufferedUploadSource({
+    documentType,
+    qualificationId,
+    description: null,
+    originalFileName,
+    content: input.content,
+  });
+}
+
+export function createSupervisorBufferUploadSource(
+  input: SupervisorBufferUploadSourceInput,
+): UploadSource {
+  const documentType = validateSupervisorDocumentType(input.documentType);
+  const description =
+    validateOptionalDocumentDescription(input.description) ?? null;
+  const originalFileName = sanitizeOriginalFileName(input.originalFileName);
+
+  return buildBufferedUploadSource({
+    documentType,
+    qualificationId: null,
+    description,
+    originalFileName,
+    content: input.content,
+  });
+}
+
+function buildBufferedUploadSource(input: {
+  readonly documentType: DocumentType;
+  readonly qualificationId: number | null;
+  readonly description: string | null;
+  readonly originalFileName: string;
+  readonly content: Buffer | Readable;
+}): UploadSource {
   const consume = async (
     maxBytes: number,
     writeChunk?: (chunk: Buffer) => Promise<void>,
@@ -83,9 +129,10 @@ export function createBufferUploadSource(
     }
 
     return {
-      documentType,
-      qualificationId,
-      originalFileName,
+      documentType: input.documentType,
+      qualificationId: input.qualificationId,
+      description: input.description,
+      originalFileName: input.originalFileName,
       byteSize,
       contentSha256: hash.digest('hex'),
     };
@@ -102,14 +149,27 @@ export function createMultipartUploadSource(
 ): UploadSource {
   return {
     streamToStaging: (writeChunk, maxBytes) =>
-      consumeMultipartRequest(req, maxBytes, writeChunk),
-    hashWithoutStoring: (maxBytes) => consumeMultipartRequest(req, maxBytes),
+      consumeMultipartRequest(req, maxBytes, 'STUDENT', writeChunk),
+    hashWithoutStoring: (maxBytes) =>
+      consumeMultipartRequest(req, maxBytes, 'STUDENT'),
+  };
+}
+
+export function createSupervisorMultipartUploadSource(
+  req: IncomingMessage,
+): UploadSource {
+  return {
+    streamToStaging: (writeChunk, maxBytes) =>
+      consumeMultipartRequest(req, maxBytes, 'SUPERVISOR', writeChunk),
+    hashWithoutStoring: (maxBytes) =>
+      consumeMultipartRequest(req, maxBytes, 'SUPERVISOR'),
   };
 }
 
 async function consumeMultipartRequest(
   req: IncomingMessage,
   maxBytes: number,
+  mode: MultipartUploadMode,
   writeChunk?: (chunk: Buffer) => Promise<void>,
 ): Promise<ReceivedUploadFile> {
   const contentType = req.headers['content-type'];
@@ -170,7 +230,11 @@ async function consumeMultipartRequest(
       );
       return;
     }
-    if (name !== 'documentType' && name !== 'qualificationId') {
+    const allowedField =
+      mode === 'STUDENT'
+        ? name === 'documentType' || name === 'qualificationId'
+        : name === 'documentType' || name === 'description';
+    if (!allowedField) {
       recordError(
         validationError(name, `Unexpected multipart field "${name}"`),
       );
@@ -316,13 +380,27 @@ async function consumeMultipartRequest(
   }
 
   const rawDocumentType = fields.get('documentType');
-  if (rawDocumentType === undefined) {
-    throw validationError('documentType', 'documentType is required');
+  let documentType: DocumentType;
+  let qualificationId: number | null;
+  let description: string | null;
+
+  if (mode === 'STUDENT') {
+    if (rawDocumentType === undefined) {
+      throw validationError('documentType', 'documentType is required');
+    }
+    documentType = validateStudentDocumentType(rawDocumentType as DocumentType);
+    qualificationId = parseMultipartQualificationId(
+      fields.get('qualificationId'),
+    );
+    description = null;
+  } else {
+    documentType = validateSupervisorDocumentType(
+      rawDocumentType as DocumentType | undefined,
+    );
+    qualificationId = null;
+    description = parseMultipartDescription(fields.get('description'));
   }
-  const documentType = validateDocumentType(rawDocumentType as DocumentType);
-  const qualificationId = parseMultipartQualificationId(
-    fields.get('qualificationId'),
-  );
+
   const originalFileName = sanitizeOriginalFileName(
     uploadState.rawFileName ?? '',
   );
@@ -330,6 +408,7 @@ async function consumeMultipartRequest(
   return {
     documentType,
     qualificationId,
+    description,
     originalFileName,
     byteSize: uploadState.byteSize,
     contentSha256: hash.digest('hex'),

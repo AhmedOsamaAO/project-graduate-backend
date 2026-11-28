@@ -58,7 +58,7 @@ export function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-function validateTrimmedPrintableText(
+export function validateTrimmedPrintableText(
   value: string,
   field: string,
   maxLength: number,
@@ -90,7 +90,7 @@ export function validateOptionalNullableText(
   return validateTrimmedPrintableText(value, field, maxLength);
 }
 
-function validateOptionalQueryText(
+export function validateOptionalQueryText(
   value: string | undefined,
   field: string,
 ): string | undefined {

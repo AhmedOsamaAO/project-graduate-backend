@@ -10,7 +10,8 @@ import type { DocumentType, Prisma } from '../generated/prisma/client';
 
 export interface DocumentArchiveContext {
   readonly documentId: number;
-  readonly studentId: number;
+  readonly studentId: number | null;
+  readonly supervisorId: number | null;
   readonly documentType: DocumentType;
   readonly qualificationId: number | null;
 }
@@ -61,6 +62,9 @@ export function createSelectedPhotoDocumentArchiveGuard(): DocumentArchiveGuard 
   return {
     name: 'selected-photo',
     async assertCanArchive(tx, context): Promise<void> {
+      if (context.studentId === null) {
+        return;
+      }
       const student = await tx.student.findUnique({
         where: { id: context.studentId },
         select: { selectedPhotoDocumentId: true },

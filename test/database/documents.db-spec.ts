@@ -210,6 +210,8 @@ describe('student documents, selected photo, and file operations (db)', () => {
         'version',
         'created_at',
         'updated_at',
+        'supervisor_id',
+        'description',
       ]);
 
       const { rows: opCols } = await admin.query<{ column_name: string }>(
@@ -238,6 +240,7 @@ describe('student documents, selected photo, and file operations (db)', () => {
         'created_at',
         'updated_at',
         'completed_at',
+        'supervisor_id',
       ]);
 
       // Reject malformed document rows & cross-student qualification FK

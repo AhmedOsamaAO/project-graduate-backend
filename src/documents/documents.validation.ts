@@ -11,6 +11,7 @@ import {
   STUDENT_ARCHIVE_FILTERS,
   hasControlCharacters,
   notFoundError,
+  validateOptionalNullableText,
   validatePositiveInt4,
   validationError,
   type SortDirection,
@@ -20,6 +21,11 @@ import { OFFICE_ATTACHMENT_MIME_TYPES } from './file-format.validator';
 
 export const DOCUMENT_ARCHIVE_FILTERS = STUDENT_ARCHIVE_FILTERS;
 export type DocumentArchiveFilter = StudentArchiveFilter;
+
+export const STUDENT_DOCUMENT_TYPES = Object.values(DocumentType).filter(
+  (type): type is Exclude<DocumentType, 'SUPERVISOR_SUPPORTING_DOCUMENT'> =>
+    type !== DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+);
 
 export const DOCUMENT_SORT_FIELDS = [
   'uploadedAt',
@@ -34,13 +40,25 @@ export type DocumentDownloadDisposition =
   (typeof DOCUMENT_DOWNLOAD_DISPOSITIONS)[number];
 
 const VALID_DOCUMENT_TYPES = new Set<string>(Object.values(DocumentType));
+const VALID_STUDENT_DOCUMENT_TYPES = new Set<string>(STUDENT_DOCUMENT_TYPES);
 const VALID_OPERATION_KINDS = new Set<string>(Object.values(FileOperationKind));
 const POSITIVE_INTEGER_TEXT = /^[1-9]\d*$/;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 const MAX_ORIGINAL_FILENAME_LENGTH = 255;
+const MAX_DESCRIPTION_LENGTH = 500;
 
 export function validateDocumentType(value: DocumentType): DocumentType {
   if (typeof value !== 'string' || !VALID_DOCUMENT_TYPES.has(value)) {
+    throw validationError(
+      'documentType',
+      'documentType must be an approved document category',
+    );
+  }
+  return value;
+}
+
+export function validateStudentDocumentType(value: DocumentType): DocumentType {
+  if (typeof value !== 'string' || !VALID_STUDENT_DOCUMENT_TYPES.has(value)) {
     throw validationError(
       'documentType',
       'documentType must be an approved student document category',
@@ -49,13 +67,50 @@ export function validateDocumentType(value: DocumentType): DocumentType {
   return value;
 }
 
-export function validateOptionalDocumentTypeFilter(
+export function validateSupervisorDocumentType(
+  value: DocumentType | undefined,
+): DocumentType {
+  if (value === undefined) {
+    return DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT;
+  }
+  if (value !== DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT) {
+    throw validationError(
+      'documentType',
+      'Supervisor documents must use SUPERVISOR_SUPPORTING_DOCUMENT',
+    );
+  }
+  return value;
+}
+
+export function validateOptionalStudentDocumentTypeFilter(
   value: DocumentType | undefined,
 ): DocumentType | undefined {
   if (value === undefined) {
     return undefined;
   }
-  return validateDocumentType(value);
+  return validateStudentDocumentType(value);
+}
+
+export function validateOptionalDocumentDescription(
+  value: string | null | undefined,
+): string | null | undefined {
+  return validateOptionalNullableText(
+    value,
+    'description',
+    MAX_DESCRIPTION_LENGTH,
+  );
+}
+
+export function parseMultipartDescription(
+  raw: string | undefined,
+): string | null {
+  if (raw === undefined) {
+    return null;
+  }
+  return (
+    validateOptionalNullableText(raw, 'description', MAX_DESCRIPTION_LENGTH) ??
+    null
+  );
 }
 
 export function validateOptionalQualificationId(
@@ -207,9 +262,11 @@ function encodeRfc5987Value(value: string): string {
 }
 
 export interface UploadRequestFingerprintInput {
-  readonly studentId: number;
+  readonly studentId: number | null;
+  readonly supervisorId: number | null;
   readonly documentType: DocumentType;
   readonly qualificationId: number | null;
+  readonly description: string | null;
   readonly originalFileName: string;
   readonly byteSize: number;
   readonly contentSha256: string;
@@ -220,8 +277,10 @@ export function computeUploadRequestFingerprint(
 ): string {
   const canonical = JSON.stringify({
     studentId: input.studentId,
+    supervisorId: input.supervisorId,
     documentType: input.documentType,
     qualificationId: input.qualificationId,
+    description: input.description,
     originalFileName: input.originalFileName,
     byteSize: input.byteSize,
     contentSha256: input.contentSha256,
@@ -359,5 +418,18 @@ export async function assertActiveStudentQualificationInTx(
       ERROR_CODES.QUALIFICATION_ARCHIVED,
       archivedMessage,
     );
+  }
+}
+
+export async function assertSupervisorExistsInTx(
+  tx: Prisma.TransactionClient,
+  supervisorId: number,
+): Promise<void> {
+  const supervisor = await tx.supervisor.findUnique({
+    where: { id: supervisorId },
+    select: { id: true },
+  });
+  if (!supervisor) {
+    throw notFoundError('Supervisor not found');
   }
 }

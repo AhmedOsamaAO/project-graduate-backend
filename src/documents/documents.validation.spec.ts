@@ -2,13 +2,18 @@ import { ApiError } from '../common/errors/api-error';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import { DocumentType } from '../generated/prisma/client';
 import {
+  STUDENT_DOCUMENT_TYPES,
   buildContentDisposition,
   buildDocumentOrderBy,
   computeUploadRequestFingerprint,
+  parseMultipartDescription,
   sanitizeOriginalFileName,
   validateDocumentDisposition,
   validateDocumentType,
   validateIdempotencyKey,
+  validateOptionalDocumentDescription,
+  validateStudentDocumentType,
+  validateSupervisorDocumentType,
 } from './documents.validation';
 
 function expectApiErrorCode(fn: () => unknown, expectedCode: string): void {
@@ -22,12 +27,54 @@ function expectApiErrorCode(fn: () => unknown, expectedCode: string): void {
 }
 
 describe('documents validation', () => {
-  it('validates all approved DocumentType categories including PhD and professional certificates', () => {
+  it('validates all approved DocumentType categories and separates student vs supervisor types', () => {
     for (const value of Object.values(DocumentType)) {
       expect(validateDocumentType(value)).toBe(value);
     }
+    for (const value of STUDENT_DOCUMENT_TYPES) {
+      expect(validateStudentDocumentType(value)).toBe(value);
+    }
+    expectApiErrorCode(
+      () =>
+        validateStudentDocumentType(
+          DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+        ),
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+    expect(validateSupervisorDocumentType(undefined)).toBe(
+      DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+    );
+    expect(
+      validateSupervisorDocumentType(
+        DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      ),
+    ).toBe(DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT);
+    expectApiErrorCode(
+      () => validateSupervisorDocumentType(DocumentType.OTHER),
+      ERROR_CODES.VALIDATION_ERROR,
+    );
     expectApiErrorCode(
       () => validateDocumentType('INVALID_TYPE' as DocumentType),
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  });
+
+  it('validates optional supervisor document descriptions', () => {
+    expect(validateOptionalDocumentDescription(undefined)).toBeUndefined();
+    expect(validateOptionalDocumentDescription(null)).toBeNull();
+    expect(validateOptionalDocumentDescription('  External CV  ')).toBe(
+      'External CV',
+    );
+    expect(parseMultipartDescription(undefined)).toBeNull();
+    expect(parseMultipartDescription('  Approval memo  ')).toBe(
+      'Approval memo',
+    );
+    expectApiErrorCode(
+      () => parseMultipartDescription('   '),
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+    expectApiErrorCode(
+      () => validateOptionalDocumentDescription('a'.repeat(501)),
       ERROR_CODES.VALIDATION_ERROR,
     );
   });
@@ -129,8 +176,10 @@ describe('documents validation', () => {
   it('computes deterministic 64-hex request fingerprints sensitive to every upload attribute', () => {
     const base = {
       studentId: 10,
+      supervisorId: null,
       documentType: DocumentType.TRANSCRIPT,
       qualificationId: 3,
+      description: null,
       originalFileName: 'transcript.pdf',
       byteSize: 1024,
       contentSha256: 'a'.repeat(64),
@@ -145,10 +194,19 @@ describe('documents validation', () => {
       ...base,
       documentType: DocumentType.OTHER,
     });
+    const fp5 = computeUploadRequestFingerprint({
+      ...base,
+      studentId: null,
+      supervisorId: 10,
+      qualificationId: null,
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      description: 'CV',
+    });
 
     expect(fp1).toMatch(/^[0-9a-f]{64}$/);
     expect(fp1).toBe(fp2);
     expect(fp1).not.toBe(fp3);
     expect(fp1).not.toBe(fp4);
+    expect(fp1).not.toBe(fp5);
   });
 });

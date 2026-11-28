@@ -44,8 +44,12 @@ import { DocumentType } from '../generated/prisma/client';
 import { CurrentSession } from '../staff-access/current-session.decorator';
 import type { AuthenticatedSession } from '../staff-access/staff-auth.service';
 import { DocumentsService } from './documents.service';
-import { validateIdempotencyKey } from './documents.validation';
+import {
+  STUDENT_DOCUMENT_TYPES,
+  validateIdempotencyKey,
+} from './documents.validation';
 import type { DocumentView, FileOperationView } from './documents.views';
+import type { UploadExecutionResult } from './file-operation-executor';
 import {
   DocumentDto,
   DocumentHistoryQueryDto,
@@ -54,10 +58,29 @@ import {
   FileOperationDto,
   GetDocumentQueryDto,
   ListStudentDocumentsQueryDto,
+  ListSupervisorDocumentsQueryDto,
   LookupFileOperationByKeyQueryDto,
   UpdateDocumentDto,
 } from './dto/documents.dto';
-import { createMultipartUploadSource } from './multipart-upload';
+import {
+  createMultipartUploadSource,
+  createSupervisorMultipartUploadSource,
+} from './multipart-upload';
+
+function applyUploadExecutionResponse(
+  res: Response,
+  result: UploadExecutionResult,
+): DocumentView | FileOperationView {
+  if (result.kind === 'COMPLETED') {
+    res.setHeader('X-File-Operation-Id', String(result.operationId));
+    res.status(HttpStatus.CREATED);
+    return result.document;
+  }
+
+  res.setHeader('X-File-Operation-Id', String(result.operation.id));
+  res.status(HttpStatus.ACCEPTED);
+  return result.operation;
+}
 
 @ApiTags('documents')
 @ApiCookieAuth('graduate_session')
@@ -104,7 +127,7 @@ export class StudentDocumentsController {
       type: 'object',
       required: ['documentType', 'file'],
       properties: {
-        documentType: { type: 'string', enum: Object.values(DocumentType) },
+        documentType: { type: 'string', enum: STUDENT_DOCUMENT_TYPES },
         qualificationId: { type: 'integer', minimum: 1 },
         file: { type: 'string', format: 'binary' },
       },
@@ -139,15 +162,95 @@ export class StudentDocumentsController {
       idempotencyKey,
       createMultipartUploadSource(req),
     );
-    if (result.kind === 'COMPLETED') {
-      res.setHeader('X-File-Operation-Id', String(result.operationId));
-      res.status(HttpStatus.CREATED);
-      return result.document;
-    }
+    return applyUploadExecutionResponse(res, result);
+  }
+}
 
-    res.setHeader('X-File-Operation-Id', String(result.operation.id));
-    res.status(HttpStatus.ACCEPTED);
-    return result.operation;
+@ApiTags('documents')
+@ApiCookieAuth('graduate_session')
+@ApiCommonErrorResponses()
+@ApiExtraModels(DocumentDto, FileOperationDto)
+@Controller('supervisors/:supervisorId/documents')
+export class SupervisorDocumentsController {
+  constructor(private readonly documents: DocumentsService) {}
+
+  @Get()
+  @ApiOperation({
+    summary:
+      "List a supervisor's supporting documents (defaults to active documents)",
+  })
+  @ApiPageResponse(
+    { $ref: getSchemaPath(DocumentDto) },
+    'Paged supervisor documents',
+  )
+  list(
+    @Param('supervisorId', ParsePositiveIntPipe) supervisorId: number,
+    @Query() query: ListSupervisorDocumentsQueryDto,
+  ): Promise<PageResult<DocumentView>> {
+    return this.documents.listSupervisorDocuments(supervisorId, query);
+  }
+
+  @Post()
+  @ApiOperation({
+    summary:
+      'Upload a supporting document for a supervisor using multipart/form-data and a staff-scoped Idempotency-Key',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiHeader({
+    name: 'X-CSRF-Token',
+    required: true,
+    description: 'Active session CSRF token',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: 'Staff-scoped idempotency key (1–128 printable characters)',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: {
+        documentType: {
+          type: 'string',
+          enum: [DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT],
+          default: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+        },
+        description: { type: 'string', maxLength: 500 },
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiCreatedDataResponse(
+    { $ref: getSchemaPath(DocumentDto) },
+    'Document uploaded and published (including idempotent replay)',
+  )
+  @ApiAcceptedResponse({
+    description: 'Upload operation is still in progress or cleaning up',
+    schema: {
+      type: 'object',
+      required: ['data'],
+      properties: { data: { $ref: getSchemaPath(FileOperationDto) } },
+    },
+  })
+  async upload(
+    @CurrentSession() session: AuthenticatedSession,
+    @Param('supervisorId', ParsePositiveIntPipe) supervisorId: number,
+    @Headers('idempotency-key')
+    rawIdempotencyKey: string | string[] | undefined,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<DocumentView | FileOperationView> {
+    const idempotencyKey = validateIdempotencyKey(
+      Array.isArray(rawIdempotencyKey) ? undefined : rawIdempotencyKey,
+    );
+    const result = await this.documents.uploadSupervisorDocument(
+      { staffUserId: session.user.id },
+      supervisorId,
+      idempotencyKey,
+      createSupervisorMultipartUploadSource(req),
+    );
+    return applyUploadExecutionResponse(res, result);
   }
 }
 
@@ -211,7 +314,7 @@ export class DocumentsController {
   @Patch(':id')
   @ApiOperation({
     summary:
-      'Update active document category or same-student qualification link',
+      'Update active document metadata (student category/qualification link or supervisor description)',
   })
   @ApiHeader({
     name: 'X-CSRF-Token',

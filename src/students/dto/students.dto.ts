@@ -32,19 +32,11 @@ import {
   OptionalIncludeArchivedField,
   OptionalNullableCalendarDateField,
   OptionalNullableTextField,
+  OptionalQueryTextField,
   PositiveInt4Field,
+  TrimOptionalQueryString,
   TrimString,
 } from './dto-decorators';
-
-function TrimOptionalQueryString() {
-  return Transform(({ value }: { value: unknown }) => {
-    if (typeof value !== 'string') {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length === 0 ? undefined : trimmed;
-  });
-}
 
 function StudentFullNameField(optional: boolean) {
   const swagger = optional
@@ -100,17 +92,6 @@ function OptionalNullableMilitaryStatusField() {
     }),
     ValidateIf((_obj, value) => value !== undefined && value !== null),
     IsEnum(MilitaryStatus),
-  );
-}
-
-function OptionalQueryTextField(description: string, example: string) {
-  return applyDecorators(
-    ApiPropertyOptional({ description, maxLength: 200, example }),
-    TrimOptionalQueryString(),
-    ValidateIf((_obj, value) => value !== undefined),
-    IsString(),
-    MaxLength(200),
-    NoControlChars(),
   );
 }
 

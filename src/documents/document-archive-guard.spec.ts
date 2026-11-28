@@ -10,6 +10,7 @@ describe('DocumentArchiveGuardRegistry and SelectedPhotoDocumentArchiveGuard', (
   const sampleContext: DocumentArchiveContext = {
     documentId: 42,
     studentId: 7,
+    supervisorId: null,
     documentType: DocumentType.PERSONAL_PHOTO,
     qualificationId: null,
   };
@@ -83,6 +84,25 @@ describe('DocumentArchiveGuardRegistry and SelectedPhotoDocumentArchiveGuard', (
     } as unknown as Prisma.TransactionClient;
     await expect(
       guard.assertCanArchive(clearedTx, sampleContext),
+    ).resolves.toBeUndefined();
+
+    const supervisorDocContext: DocumentArchiveContext = {
+      documentId: 99,
+      studentId: null,
+      supervisorId: 12,
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      qualificationId: null,
+    };
+    const unreachableStudentTx = {
+      student: {
+        findUnique: () =>
+          Promise.reject(
+            new Error('should not query student for supervisor doc'),
+          ),
+      },
+    } as unknown as Prisma.TransactionClient;
+    await expect(
+      guard.assertCanArchive(unreachableStudentTx, supervisorDocContext),
     ).resolves.toBeUndefined();
   });
 });

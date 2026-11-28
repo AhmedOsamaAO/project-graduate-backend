@@ -38,6 +38,7 @@ import {
 } from '../students/students.validation';
 import {
   assertActiveStudentQualificationInTx,
+  assertSupervisorExistsInTx,
   computeUploadRequestFingerprint,
   idempotencyKeyConflictError,
   uploadInterruptedError,
@@ -90,6 +91,10 @@ interface SanitizedFailure {
   readonly code: string;
   readonly message: string;
 }
+
+type UploadTarget =
+  | { readonly ownerKind: 'STUDENT'; readonly studentId: number }
+  | { readonly ownerKind: 'SUPERVISOR'; readonly supervisorId: number };
 
 @Injectable()
 export class FileOperationExecutor
@@ -182,6 +187,38 @@ export class FileOperationExecutor
     source: UploadSource,
   ): Promise<UploadExecutionResult> {
     const validStudentId = validatePositiveInt4(studentId, 'studentId');
+    return this.enqueueUpload(
+      actor,
+      { ownerKind: 'STUDENT', studentId: validStudentId },
+      idempotencyKey,
+      source,
+    );
+  }
+
+  executeSupervisorUpload(
+    actor: StaffActor,
+    supervisorId: number,
+    idempotencyKey: string,
+    source: UploadSource,
+  ): Promise<UploadExecutionResult> {
+    const validSupervisorId = validatePositiveInt4(
+      supervisorId,
+      'supervisorId',
+    );
+    return this.enqueueUpload(
+      actor,
+      { ownerKind: 'SUPERVISOR', supervisorId: validSupervisorId },
+      idempotencyKey,
+      source,
+    );
+  }
+
+  private enqueueUpload(
+    actor: StaffActor,
+    target: UploadTarget,
+    idempotencyKey: string,
+    source: UploadSource,
+  ): Promise<UploadExecutionResult> {
     const validKey = validateIdempotencyKey(idempotencyKey);
 
     if (this.shuttingDown) {
@@ -194,12 +231,7 @@ export class FileOperationExecutor
       );
     }
 
-    const work = this.runStudentUpload(
-      actor,
-      validStudentId,
-      validKey,
-      source,
-    ).finally(() => {
+    const work = this.runUpload(actor, target, validKey, source).finally(() => {
       this.activeTasks.delete(work);
     });
     this.activeTasks.add(work);
@@ -226,9 +258,9 @@ export class FileOperationExecutor
     }
   }
 
-  private async runStudentUpload(
+  private async runUpload(
     actor: StaffActor,
-    studentId: number,
+    target: UploadTarget,
     idempotencyKey: string,
     source: UploadSource,
   ): Promise<UploadExecutionResult> {
@@ -242,20 +274,30 @@ export class FileOperationExecutor
       },
     });
     if (existing) {
-      return this.resolveExistingUploadOperation(existing, studentId, source);
+      return this.resolveExistingUploadOperation(existing, target, source);
     }
 
-    const studentCheck = await this.prisma.student.findUnique({
-      where: { id: studentId },
-      select: { id: true, archivedAt: true },
-    });
-    if (!studentCheck) {
-      throw notFoundError('Student not found');
-    }
-    if (studentCheck.archivedAt !== null) {
-      throw studentArchivedError(
-        'Archived student must be restored before uploading documents',
-      );
+    if (target.ownerKind === 'STUDENT') {
+      const studentCheck = await this.prisma.student.findUnique({
+        where: { id: target.studentId },
+        select: { id: true, archivedAt: true },
+      });
+      if (!studentCheck) {
+        throw notFoundError('Student not found');
+      }
+      if (studentCheck.archivedAt !== null) {
+        throw studentArchivedError(
+          'Archived student must be restored before uploading documents',
+        );
+      }
+    } else {
+      const supervisorCheck = await this.prisma.supervisor.findUnique({
+        where: { id: target.supervisorId },
+        select: { id: true },
+      });
+      if (!supervisorCheck) {
+        throw notFoundError('Supervisor not found');
+      }
     }
 
     const stagingKey = this.storage.generateKey();
@@ -263,7 +305,7 @@ export class FileOperationExecutor
     const claimToken = randomBytes(32).toString('hex');
     const admitted = await this.admitUploadOperation({
       actor,
-      studentId,
+      target,
       idempotencyKey,
       stagingKey,
       storageKey,
@@ -273,7 +315,7 @@ export class FileOperationExecutor
     if (!admitted.freshlyCreated) {
       return this.resolveExistingUploadOperation(
         admitted.operation,
-        studentId,
+        target,
         source,
       );
     }
@@ -287,7 +329,7 @@ export class FileOperationExecutor
 
       const received = await this.streamAndHashStagingFile(stagingKey, source);
       const requestFingerprint = this.computeReceivedFingerprint(
-        studentId,
+        target,
         received,
       );
 
@@ -312,7 +354,7 @@ export class FileOperationExecutor
         actor,
         operationId: operation.id,
         claimToken,
-        studentId,
+        target,
         storageKey,
         requestFingerprint,
         received,
@@ -367,7 +409,7 @@ export class FileOperationExecutor
 
   private async admitUploadOperation(input: {
     readonly actor: StaffActor;
-    readonly studentId: number;
+    readonly target: UploadTarget;
     readonly idempotencyKey: string;
     readonly stagingKey: string;
     readonly storageKey: string;
@@ -384,7 +426,14 @@ export class FileOperationExecutor
           kind: FileOperationKind.UPLOAD,
           status: FileOperationStatus.IN_PROGRESS,
           requestedByStaffUserId: input.actor.staffUserId,
-          studentId: input.studentId,
+          studentId:
+            input.target.ownerKind === 'STUDENT'
+              ? input.target.studentId
+              : null,
+          supervisorId:
+            input.target.ownerKind === 'SUPERVISOR'
+              ? input.target.supervisorId
+              : null,
           idempotencyKey: input.idempotencyKey,
           stagingKey: input.stagingKey,
           storageKey: input.storageKey,
@@ -415,18 +464,25 @@ export class FileOperationExecutor
 
   private async resolveExistingUploadOperation(
     existing: FileOperation,
-    studentId: number,
+    target: UploadTarget,
     source: UploadSource,
   ): Promise<UploadExecutionResult> {
     const received = await source.hashWithoutStoring(
       this.config.uploadMaxBytes,
     );
     const incomingFingerprint = this.computeReceivedFingerprint(
-      studentId,
+      target,
       received,
     );
 
-    if (existing.studentId !== studentId) {
+    const expectedStudentId =
+      target.ownerKind === 'STUDENT' ? target.studentId : null;
+    const expectedSupervisorId =
+      target.ownerKind === 'SUPERVISOR' ? target.supervisorId : null;
+    if (
+      existing.studentId !== expectedStudentId ||
+      existing.supervisorId !== expectedSupervisorId
+    ) {
       throw idempotencyKeyConflictError();
     }
     if (
@@ -520,7 +576,7 @@ export class FileOperationExecutor
     readonly actor: StaffActor;
     readonly operationId: number;
     readonly claimToken: string;
-    readonly studentId: number;
+    readonly target: UploadTarget;
     readonly storageKey: string;
     readonly requestFingerprint: string;
     readonly received: ReceivedUploadFile;
@@ -556,23 +612,39 @@ export class FileOperationExecutor
           );
         }
 
-        await this.students.assertActiveStudentInTx(tx, input.studentId);
-
-        if (input.received.qualificationId !== null) {
-          await tx.$queryRaw`SELECT id FROM student_qualification WHERE id = ${input.received.qualificationId} FOR SHARE`;
-          await assertActiveStudentQualificationInTx(
+        if (input.target.ownerKind === 'STUDENT') {
+          await this.students.assertActiveStudentInTx(
             tx,
-            input.received.qualificationId,
-            input.studentId,
-            'Archived qualification must be restored before attaching documents',
+            input.target.studentId,
           );
+
+          if (input.received.qualificationId !== null) {
+            await tx.$queryRaw`SELECT id FROM student_qualification WHERE id = ${input.received.qualificationId} FOR SHARE`;
+            await assertActiveStudentQualificationInTx(
+              tx,
+              input.received.qualificationId,
+              input.target.studentId,
+              'Archived qualification must be restored before attaching documents',
+            );
+          }
+        } else {
+          await tx.$queryRaw`SELECT id FROM supervisor WHERE id = ${input.target.supervisorId} FOR SHARE`;
+          await assertSupervisorExistsInTx(tx, input.target.supervisorId);
         }
 
         const created = await tx.document.create({
           data: {
-            studentId: input.studentId,
+            studentId:
+              input.target.ownerKind === 'STUDENT'
+                ? input.target.studentId
+                : null,
+            supervisorId:
+              input.target.ownerKind === 'SUPERVISOR'
+                ? input.target.supervisorId
+                : null,
             qualificationId: input.received.qualificationId,
             documentType: input.received.documentType,
+            description: input.received.description,
             originalFileName: input.received.originalFileName,
             storageKey: input.storageKey,
             mimeType: input.mimeType,
@@ -862,13 +934,16 @@ export class FileOperationExecutor
   }
 
   private computeReceivedFingerprint(
-    studentId: number,
+    target: UploadTarget,
     received: ReceivedUploadFile,
   ): string {
     return computeUploadRequestFingerprint({
-      studentId,
+      studentId: target.ownerKind === 'STUDENT' ? target.studentId : null,
+      supervisorId:
+        target.ownerKind === 'SUPERVISOR' ? target.supervisorId : null,
       documentType: received.documentType,
       qualificationId: received.qualificationId,
+      description: received.description,
       originalFileName: received.originalFileName,
       byteSize: received.byteSize,
       contentSha256: received.contentSha256,

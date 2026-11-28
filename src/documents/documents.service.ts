@@ -32,6 +32,7 @@ import {
 import { DocumentArchiveGuardRegistry } from './document-archive-guard';
 import {
   assertActiveStudentQualificationInTx,
+  assertSupervisorExistsInTx,
   buildContentDisposition,
   buildDocumentOrderBy,
   documentAlreadyArchivedError,
@@ -45,8 +46,10 @@ import {
   validateDocumentType,
   validateFileOperationKind,
   validateIdempotencyKey,
-  validateOptionalDocumentTypeFilter,
+  validateOptionalDocumentDescription,
   validateOptionalQualificationId,
+  validateOptionalStudentDocumentTypeFilter,
+  validateStudentDocumentType,
   type DocumentArchiveFilter,
   type DocumentDownloadDisposition,
   type DocumentSortField,
@@ -83,6 +86,14 @@ export interface ListStudentDocumentsInput {
   readonly sortOrder?: SortDirection;
 }
 
+export interface ListSupervisorDocumentsInput {
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly archiveStatus?: DocumentArchiveFilter;
+  readonly sortBy?: DocumentSortField;
+  readonly sortOrder?: SortDirection;
+}
+
 export interface GetDocumentOptions {
   readonly includeArchived?: boolean;
 }
@@ -103,6 +114,7 @@ export interface UpdateDocumentInput {
   readonly expectedVersion: number;
   readonly qualificationId?: number | null;
   readonly documentType?: DocumentType;
+  readonly description?: string | null;
 }
 
 export interface DocumentHistoryQueryInput extends Partial<
@@ -135,7 +147,9 @@ export class DocumentsService {
   ): Promise<PageResult<DocumentView>> {
     const validStudentId = validatePositiveInt4(studentId, 'studentId');
     const pagination = normalizePagination(query);
-    const documentType = validateOptionalDocumentTypeFilter(query.documentType);
+    const documentType = validateOptionalStudentDocumentTypeFilter(
+      query.documentType,
+    );
     const qualificationId =
       query.qualificationId !== undefined
         ? validatePositiveInt4(query.qualificationId, 'qualificationId')
@@ -181,6 +195,44 @@ export class DocumentsService {
         throw notFoundError('Student not found');
       }
 
+      const count = await tx.document.count({ where });
+      const items = await tx.document.findMany({
+        where,
+        orderBy,
+        skip: (pagination.page - 1) * pagination.pageSize,
+        take: pagination.pageSize,
+      });
+      return { total: count, rows: items };
+    });
+
+    return createPage(
+      rows.map(documentView),
+      total,
+      pagination.page,
+      pagination.pageSize,
+    );
+  }
+
+  async listSupervisorDocuments(
+    supervisorId: number,
+    query: ListSupervisorDocumentsInput = {},
+  ): Promise<PageResult<DocumentView>> {
+    const validSupervisorId = validatePositiveInt4(
+      supervisorId,
+      'supervisorId',
+    );
+    const pagination = normalizePagination(query);
+    const archiveStatus = validateArchiveFilter(query.archiveStatus);
+    const orderBy = buildDocumentOrderBy(query.sortBy, query.sortOrder);
+
+    const where: Prisma.DocumentWhereInput = {
+      supervisorId: validSupervisorId,
+      ...(archiveStatus === 'ACTIVE' ? { archivedAt: null } : {}),
+      ...(archiveStatus === 'ARCHIVED' ? { archivedAt: { not: null } } : {}),
+    };
+
+    const { total, rows } = await this.prisma.$transaction(async (tx) => {
+      await assertSupervisorExistsInTx(tx, validSupervisorId);
       const count = await tx.document.count({ where });
       const items = await tx.document.findMany({
         where,
@@ -274,6 +326,20 @@ export class DocumentsService {
     );
   }
 
+  uploadSupervisorDocument(
+    actor: StaffActor,
+    supervisorId: number,
+    idempotencyKey: string,
+    source: UploadSource,
+  ): Promise<UploadExecutionResult> {
+    return this.executor.executeSupervisorUpload(
+      actor,
+      supervisorId,
+      idempotencyKey,
+      source,
+    );
+  }
+
   async updateDocument(
     actor: StaffActor,
     id: number,
@@ -286,7 +352,8 @@ export class DocumentsService {
     );
     if (
       input.qualificationId === undefined &&
-      input.documentType === undefined
+      input.documentType === undefined &&
+      input.description === undefined
     ) {
       throw validationError(
         'body',
@@ -301,58 +368,111 @@ export class DocumentsService {
       input.documentType !== undefined
         ? validateDocumentType(input.documentType)
         : undefined;
+    const description = validateOptionalDocumentDescription(input.description);
 
     return this.runVersionedMutation(
       validId,
       expectedVersion,
-      { qualificationId, documentType },
+      { qualificationId, documentType, description },
       async (tx, before, studentSelectedPhotoId, data) => {
         if (before.archivedAt !== null) {
           throw documentArchivedError();
         }
 
-        if (
-          data.qualificationId !== undefined &&
-          data.qualificationId !== null &&
-          data.qualificationId !== before.qualificationId
-        ) {
-          await assertActiveStudentQualificationInTx(
-            tx,
-            data.qualificationId,
-            before.studentId,
-          );
-        }
+        let updateData: Prisma.DocumentUpdateInput;
 
-        const nextDocumentType = data.documentType ?? before.documentType;
-        if (
-          nextDocumentType === DocumentType.PERSONAL_PHOTO &&
-          !PERSONAL_PHOTO_MIME_TYPES.has(
-            before.mimeType as SupportedDocumentMimeType,
-          )
-        ) {
-          throw invalidDocumentTypeForMimeError();
-        }
-        if (
-          before.documentType === DocumentType.PERSONAL_PHOTO &&
-          nextDocumentType !== DocumentType.PERSONAL_PHOTO &&
-          studentSelectedPhotoId === before.id
-        ) {
-          throw documentSelectedAsPhotoError(
-            'Clear or replace the selected personal photo before changing its document type',
-          );
+        if (before.studentId !== null) {
+          if (data.description !== undefined) {
+            throw validationError(
+              'description',
+              'description is only supported for supervisor documents',
+            );
+          }
+
+          const nextStudentDocumentType =
+            data.documentType !== undefined
+              ? validateStudentDocumentType(data.documentType)
+              : before.documentType;
+
+          if (
+            data.qualificationId !== undefined &&
+            data.qualificationId !== null &&
+            data.qualificationId !== before.qualificationId
+          ) {
+            await assertActiveStudentQualificationInTx(
+              tx,
+              data.qualificationId,
+              before.studentId,
+            );
+          }
+
+          if (
+            nextStudentDocumentType === DocumentType.PERSONAL_PHOTO &&
+            !PERSONAL_PHOTO_MIME_TYPES.has(
+              before.mimeType as SupportedDocumentMimeType,
+            )
+          ) {
+            throw invalidDocumentTypeForMimeError();
+          }
+          if (
+            before.documentType === DocumentType.PERSONAL_PHOTO &&
+            nextStudentDocumentType !== DocumentType.PERSONAL_PHOTO &&
+            studentSelectedPhotoId === before.id
+          ) {
+            throw documentSelectedAsPhotoError(
+              'Clear or replace the selected personal photo before changing its document type',
+            );
+          }
+
+          updateData = {
+            ...(data.qualificationId !== undefined
+              ? {
+                  qualification:
+                    data.qualificationId === null
+                      ? { disconnect: true }
+                      : {
+                          connect: {
+                            id_studentId: {
+                              id: data.qualificationId,
+                              studentId: before.studentId,
+                            },
+                          },
+                        },
+                }
+              : {}),
+            ...(data.documentType !== undefined
+              ? { documentType: nextStudentDocumentType }
+              : {}),
+            version: { increment: 1 },
+          };
+        } else {
+          if (data.qualificationId !== undefined) {
+            throw validationError(
+              'qualificationId',
+              'qualificationId is not supported for supervisor documents',
+            );
+          }
+          if (
+            data.documentType !== undefined &&
+            data.documentType !== DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT
+          ) {
+            throw validationError(
+              'documentType',
+              'Supervisor documents must use SUPERVISOR_SUPPORTING_DOCUMENT',
+            );
+          }
+
+          updateData = {
+            ...(data.description !== undefined
+              ? { description: data.description }
+              : {}),
+            version: { increment: 1 },
+          };
         }
 
         const after = await tx.document.update({
           where: { id: before.id },
-          data: {
-            ...(data.qualificationId !== undefined
-              ? { qualificationId: data.qualificationId }
-              : {}),
-            ...(data.documentType !== undefined
-              ? { documentType: data.documentType }
-              : {}),
-            version: { increment: 1 },
-          },
+          data: updateData,
         });
 
         await appendStaffRecordHistory(tx, actor, {
@@ -364,7 +484,7 @@ export class DocumentsService {
         });
         return documentView(after);
       },
-      qualificationId,
+      { extraQualificationId: qualificationId },
     );
   }
 
@@ -411,6 +531,7 @@ export class DocumentsService {
         });
         return documentView(after);
       },
+      { supervisorLockMode: 'UPDATE' },
     );
   }
 
@@ -529,42 +650,67 @@ export class DocumentsService {
       studentSelectedPhotoId: number | null,
       payload: NoInfer<Payload>,
     ) => Promise<Result>,
-    extraQualificationId?: number | null,
+    options: {
+      readonly extraQualificationId?: number | null;
+      readonly supervisorLockMode?: 'SHARE' | 'UPDATE';
+    } = {},
   ): Promise<Result> {
     return this.transactions.run(
-      { id, expectedVersion, payload, extraQualificationId },
+      {
+        id,
+        expectedVersion,
+        payload,
+        extraQualificationId: options.extraQualificationId,
+        supervisorLockMode: options.supervisorLockMode ?? 'SHARE',
+      },
       async (tx, original) => {
         const target = await tx.document.findUnique({
           where: { id: original.id },
-          select: { id: true, studentId: true, qualificationId: true },
+          select: {
+            id: true,
+            studentId: true,
+            supervisorId: true,
+            qualificationId: true,
+          },
         });
         if (!target) {
           throw notFoundError('Document not found');
         }
 
-        const student = await this.students.assertActiveStudentInTx(
-          tx,
-          target.studentId,
-        );
-
-        const qualIdsToLock = [
-          target.qualificationId,
-          original.extraQualificationId,
-        ]
-          .filter((qid): qid is number => typeof qid === 'number')
-          .filter((qid, index, arr) => arr.indexOf(qid) === index)
-          .sort((a, b) => a - b);
-
-        for (const qid of qualIdsToLock) {
-          await tx.$queryRaw`SELECT id FROM student_qualification WHERE id = ${qid} FOR SHARE`;
-        }
-
-        if (target.qualificationId !== null) {
-          await assertActiveStudentQualificationInTx(
+        let studentSelectedPhotoId: number | null = null;
+        if (target.studentId !== null) {
+          const student = await this.students.assertActiveStudentInTx(
             tx,
-            target.qualificationId,
             target.studentId,
           );
+          studentSelectedPhotoId = student.selectedPhotoDocumentId;
+
+          const qualIdsToLock = [
+            target.qualificationId,
+            original.extraQualificationId,
+          ]
+            .filter((qid): qid is number => typeof qid === 'number')
+            .filter((qid, index, arr) => arr.indexOf(qid) === index)
+            .sort((a, b) => a - b);
+
+          for (const qid of qualIdsToLock) {
+            await tx.$queryRaw`SELECT id FROM student_qualification WHERE id = ${qid} FOR SHARE`;
+          }
+
+          if (target.qualificationId !== null) {
+            await assertActiveStudentQualificationInTx(
+              tx,
+              target.qualificationId,
+              target.studentId,
+            );
+          }
+        } else if (target.supervisorId !== null) {
+          if (original.supervisorLockMode === 'UPDATE') {
+            await tx.$queryRaw`SELECT id FROM supervisor WHERE id = ${target.supervisorId} FOR UPDATE`;
+          } else {
+            await tx.$queryRaw`SELECT id FROM supervisor WHERE id = ${target.supervisorId} FOR SHARE`;
+          }
+          await assertSupervisorExistsInTx(tx, target.supervisorId);
         }
 
         const before = await lockDocument(tx, original.id);
@@ -580,12 +726,7 @@ export class DocumentsService {
         }
         assertAvailableDocument(before.availability);
 
-        return execute(
-          tx,
-          before,
-          student.selectedPhotoDocumentId,
-          original.payload,
-        );
+        return execute(tx, before, studentSelectedPhotoId, original.payload);
       },
     );
   }
@@ -611,15 +752,22 @@ function assertAvailableDocument(availability: DocumentAvailability): void {
 function isDocumentVisible(
   row: {
     readonly archivedAt: Date | null;
-    readonly student: { readonly archivedAt: Date | null };
+    readonly student: { readonly archivedAt: Date | null } | null;
     readonly qualification: { readonly archivedAt: Date | null } | null;
   },
   includeArchived: boolean,
 ): boolean {
-  return (
-    includeArchived ||
-    (row.archivedAt === null &&
+  if (includeArchived) {
+    return true;
+  }
+  if (row.archivedAt !== null) {
+    return false;
+  }
+  if (row.student !== null) {
+    return (
       row.student.archivedAt === null &&
-      (row.qualification === null || row.qualification.archivedAt === null))
-  );
+      (row.qualification === null || row.qualification.archivedAt === null)
+    );
+  }
+  return true;
 }
