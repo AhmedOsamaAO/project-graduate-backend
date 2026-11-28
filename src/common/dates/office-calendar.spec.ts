@@ -1,6 +1,7 @@
 import {
   OFFICE_TIME_ZONE,
   formatCalendarDate,
+  getOfficeCurrentYear,
   getOfficeToday,
   isFutureOfficeDate,
   parseCalendarDate,
@@ -82,6 +83,19 @@ describe('office-calendar', () => {
       expect(isFutureOfficeDate('2026-01-15', now)).toBe(false);
       expect(isFutureOfficeDate('2026-01-16', now)).toBe(false);
       expect(isFutureOfficeDate('2026-01-17', now)).toBe(true);
+    });
+  });
+
+  describe('getOfficeCurrentYear', () => {
+    it('returns the current Gregorian year in Africa/Cairo across UTC year boundaries', () => {
+      // 2026-12-31 21:59:59.999 UTC is 2026-12-31 23:59:59.999 in Cairo (UTC+2)
+      expect(getOfficeCurrentYear(new Date('2026-12-31T21:59:59.999Z'))).toBe(
+        2026,
+      );
+      // 2026-12-31 22:00:00.000 UTC is 2027-01-01 00:00:00.000 in Cairo (UTC+2)
+      expect(getOfficeCurrentYear(new Date('2026-12-31T22:00:00.000Z'))).toBe(
+        2027,
+      );
     });
   });
 });

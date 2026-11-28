@@ -16,6 +16,7 @@ import type {
 } from '../generated/prisma/client';
 import {
   isForeignKeyConstraintError,
+  isRestrictViolationError,
   isUniqueConstraintError,
 } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
@@ -447,6 +448,7 @@ export class ReferenceDataService {
         uniqueMessage:
           'A faculty with this name already exists in the institution',
         missingParentMessage: 'Educational institution not found',
+        inUseMessage: 'Faculty is still referenced and cannot be reparented',
       },
     );
   }
@@ -641,6 +643,7 @@ export class ReferenceDataService {
         uniqueMessage:
           'A department with this name already exists in the faculty',
         missingParentMessage: 'Faculty not found',
+        inUseMessage: 'Department is still referenced and cannot be reparented',
       },
     );
   }
@@ -748,6 +751,7 @@ export class ReferenceDataService {
       readonly uniqueCode: ErrorCode;
       readonly uniqueMessage: string;
       readonly missingParentMessage: string;
+      readonly inUseMessage?: string;
     },
   ): Promise<T> {
     try {
@@ -759,6 +763,9 @@ export class ReferenceDataService {
           options.uniqueCode,
           options.uniqueMessage,
         );
+      }
+      if (options.inUseMessage && isRestrictViolationError(error)) {
+        throw recordInUseError(options.inUseMessage);
       }
       if (isForeignKeyConstraintError(error)) {
         throw notFoundError(options.missingParentMessage);

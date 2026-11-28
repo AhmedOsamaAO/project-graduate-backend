@@ -97,7 +97,13 @@ function createFakeCatalogPrisma() {
   };
 
   let forcedFacultyCreateError: Error | null = null;
+  let forcedFacultyUpdateError: Error | null = null;
   let forcedDepartmentCreateError: Error | null = null;
+  let forcedDepartmentUpdateError: Error | null = null;
+  const qualificationReferences: Array<{
+    facultyId: number | null;
+    departmentId: number | null;
+  }> = [];
 
   const staffUsers = new Map([
     [10, { id: 10, username: 'staff.one', fullName: 'Staff One' }],
@@ -353,9 +359,20 @@ function createFakeCatalogPrisma() {
           version: { increment: number };
         };
       }) => {
+        if (forcedFacultyUpdateError !== null) {
+          const error = forcedFacultyUpdateError;
+          forcedFacultyUpdateError = null;
+          return Promise.reject(error);
+        }
         const row = state.faculties.find((item) => item.id === where.id)!;
         const nextInstitutionId = data.institutionId ?? row.institutionId;
         const nextName = data.name ?? row.name;
+        if (
+          nextInstitutionId !== row.institutionId &&
+          qualificationReferences.some((ref) => ref.facultyId === row.id)
+        ) {
+          return Promise.reject(adapterError('23001', 'driverCause'));
+        }
         if (!state.institutions.some((inst) => inst.id === nextInstitutionId)) {
           return Promise.reject(adapterError('23503'));
         }
@@ -454,9 +471,20 @@ function createFakeCatalogPrisma() {
           version: { increment: number };
         };
       }) => {
+        if (forcedDepartmentUpdateError !== null) {
+          const error = forcedDepartmentUpdateError;
+          forcedDepartmentUpdateError = null;
+          return Promise.reject(error);
+        }
         const row = state.departments.find((item) => item.id === where.id)!;
         const nextFacultyId = data.facultyId ?? row.facultyId;
         const nextName = data.name ?? row.name;
+        if (
+          nextFacultyId !== row.facultyId &&
+          qualificationReferences.some((ref) => ref.departmentId === row.id)
+        ) {
+          return Promise.reject(adapterError('23001', 'driverCause'));
+        }
         if (!state.faculties.some((fac) => fac.id === nextFacultyId)) {
           return Promise.reject(adapterError('23503'));
         }
@@ -561,8 +589,20 @@ function createFakeCatalogPrisma() {
     setForcedFacultyCreateError: (error: Error) => {
       forcedFacultyCreateError = error;
     },
+    setForcedFacultyUpdateError: (error: Error) => {
+      forcedFacultyUpdateError = error;
+    },
     setForcedDepartmentCreateError: (error: Error) => {
       forcedDepartmentCreateError = error;
+    },
+    setForcedDepartmentUpdateError: (error: Error) => {
+      forcedDepartmentUpdateError = error;
+    },
+    addQualificationReference: (ref: {
+      facultyId: number | null;
+      departmentId: number | null;
+    }) => {
+      qualificationReferences.push(ref);
     },
   };
 }
@@ -846,5 +886,90 @@ describe('ReferenceDataService', () => {
         name: 'Biomedical',
       }),
     ).rejects.toMatchObject({ code: ERROR_CODES.NOT_FOUND });
+  });
+
+  it('blocks reparenting a faculty or department referenced by student qualifications and maps 23001 restrict errors to RECORD_IN_USE', async () => {
+    const {
+      service,
+      addQualificationReference,
+      setForcedFacultyUpdateError,
+      setForcedDepartmentUpdateError,
+    } = makeService();
+    const instA = await service.createInstitution(actor, {
+      name: 'Source Univ',
+      institutionType: 'PUBLIC_UNIVERSITY',
+    });
+    const instB = await service.createInstitution(actor, {
+      name: 'Target Univ',
+      institutionType: 'PRIVATE_UNIVERSITY',
+    });
+    const facA = await service.createFaculty(actor, {
+      institutionId: instA.id,
+      name: 'Faculty A',
+    });
+    const facB = await service.createFaculty(actor, {
+      institutionId: instA.id,
+      name: 'Faculty B',
+    });
+    const facUnref = await service.createFaculty(actor, {
+      institutionId: instA.id,
+      name: 'Unreferenced Faculty',
+    });
+    const dept = await service.createDepartment(actor, {
+      facultyId: facB.id,
+      name: 'Department B',
+    });
+
+    // Qualification referencing facA (with no departments) blocks reparenting facA
+    addQualificationReference({ facultyId: facA.id, departmentId: null });
+    await expect(
+      service.updateFaculty(actor, facA.id, {
+        expectedVersion: facA.version,
+        institutionId: instB.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.RECORD_IN_USE });
+
+    // Qualification referencing dept blocks reparenting dept to facA
+    addQualificationReference({ facultyId: facB.id, departmentId: dept.id });
+    await expect(
+      service.updateDepartment(actor, dept.id, {
+        expectedVersion: dept.version,
+        facultyId: facA.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.RECORD_IN_USE });
+
+    // Renaming a qualification-referenced faculty or department remains allowed
+    const renamedFac = await service.updateFaculty(actor, facA.id, {
+      expectedVersion: facA.version,
+      name: 'Faculty A Renamed',
+    });
+    expect(renamedFac.name).toBe('Faculty A Renamed');
+
+    const renamedDept = await service.updateDepartment(actor, dept.id, {
+      expectedVersion: dept.version,
+      name: 'Department B Renamed',
+    });
+    expect(renamedDept.name).toBe('Department B Renamed');
+
+    // Race hitting PostgreSQL ON UPDATE RESTRICT (23001) maps to RECORD_IN_USE
+    setForcedFacultyUpdateError(adapterError('23001', 'driverCause'));
+    await expect(
+      service.updateFaculty(actor, facUnref.id, {
+        expectedVersion: facUnref.version,
+        institutionId: instB.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.RECORD_IN_USE });
+
+    const deptUnref = await service.createDepartment(actor, {
+      facultyId: facUnref.id,
+      name: 'Unref Dept',
+    });
+    setForcedDepartmentUpdateError(adapterError('23001'));
+    await expect(
+      service.updateDepartment(actor, deptUnref.id, {
+        expectedVersion: deptUnref.version,
+        facultyId: facA.id,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.RECORD_IN_USE });
   });
 });

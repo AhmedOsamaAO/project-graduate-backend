@@ -83,3 +83,8 @@ export function formatCalendarDate(date: Date): string {
 export function isFutureOfficeDate(calendarDate: string, now?: Date): boolean {
   return calendarDate > getOfficeToday(now);
 }
+
+/** Returns the current Gregorian calendar year in the fixed office calendar (Africa/Cairo). */
+export function getOfficeCurrentYear(now: Date = new Date()): number {
+  return Number(getOfficeToday(now).slice(0, 4));
+}
