@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import {
@@ -36,6 +37,7 @@ import {
   CreateStudentDto,
   GetStudentQueryDto,
   ListStudentsQueryDto,
+  SetStudentSelectedPhotoDto,
   StudentDto,
   StudentHistoryQueryDto,
   StudentVersionActionDto,
@@ -160,6 +162,32 @@ export class StudentsController {
       { staffUserId: session.user.id },
       id,
       body.expectedVersion,
+    );
+  }
+
+  @Put(':id/selected-photo')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Select, replace, or clear a student selected personal photo',
+  })
+  @ApiHeader({
+    name: 'X-CSRF-Token',
+    required: true,
+    description: 'Active session CSRF token',
+  })
+  @ApiDataResponse(
+    { $ref: getSchemaPath(StudentDto) },
+    'Updated student record with selected personal photo',
+  )
+  setSelectedPhoto(
+    @CurrentSession() session: AuthenticatedSession,
+    @Param('id', ParsePositiveIntPipe) id: number,
+    @Body() body: SetStudentSelectedPhotoDto,
+  ): Promise<StudentView> {
+    return this.students.setSelectedPhoto(
+      { staffUserId: session.user.id },
+      id,
+      body,
     );
   }
 

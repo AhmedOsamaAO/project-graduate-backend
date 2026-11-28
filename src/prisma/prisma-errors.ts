@@ -49,6 +49,15 @@ const UNIQUE_CONSTRAINT_CODES = new Set(['P2002', '23505']);
 const RESTRICT_VIOLATION_CODES = new Set(['23001']);
 const FOREIGN_KEY_CONSTRAINT_CODES = new Set(['P2003', '23503', '23001']);
 const RETRYABLE_TRANSACTION_CODES = new Set(['P2034', '40001', '40P01']);
+const DEFINITE_ROLLBACK_PRISMA_CODES = new Set([
+  'P2002',
+  'P2003',
+  'P2004',
+  'P2011',
+  'P2012',
+  'P2025',
+]);
+const DEFINITE_ROLLBACK_PG_CLASS_PREFIXES = ['22', '23', '42'];
 
 export function isUniqueConstraintError(error: unknown): boolean {
   return hasDatabaseCode(error, UNIQUE_CONSTRAINT_CODES);
@@ -66,5 +75,37 @@ export function isRetryableTransactionError(error: unknown): boolean {
   return (
     hasDatabaseCode(error, RETRYABLE_TRANSACTION_CODES) ||
     hasDriverAdapterCauseKind(error, 'TransactionWriteConflict')
+  );
+}
+
+/**
+ * Identifies database errors where PostgreSQL synchronously rejected a statement
+ * prior to COMMIT (for example constraint checks or insufficient privilege),
+ * proving the transaction rolled back without an ambiguous commit outcome.
+ */
+export function isDefiniteRollbackDatabaseError(error: unknown): boolean {
+  if (hasDriverAdapterCauseKind(error, 'DatabaseAccessDenied')) {
+    return true;
+  }
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const candidate = error as PrismaErrorLike;
+  const driverCause = candidate.meta?.driverAdapterError?.cause;
+  const codes = [
+    candidate.code,
+    candidate.cause?.originalCode,
+    candidate.cause?.code,
+    candidate.meta?.code,
+    driverCause?.originalCode,
+    driverCause?.code,
+  ];
+  return codes.some(
+    (code) =>
+      code !== undefined &&
+      (DEFINITE_ROLLBACK_PRISMA_CODES.has(code) ||
+        DEFINITE_ROLLBACK_PG_CLASS_PREFIXES.some((prefix) =>
+          code.startsWith(prefix),
+        )),
   );
 }

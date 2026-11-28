@@ -365,3 +365,35 @@ export function studentNotArchivedError(): ApiError {
     'Student record is not archived',
   );
 }
+
+export function documentOwnerMismatchError(): ApiError {
+  return new ApiError(
+    HttpStatus.CONFLICT,
+    ERROR_CODES.DOCUMENT_OWNER_MISMATCH,
+    'Selected personal photo must belong to the same student',
+  );
+}
+
+export function invalidSelectedPhotoError(): ApiError {
+  return new ApiError(
+    HttpStatus.CONFLICT,
+    ERROR_CODES.INVALID_SELECTED_PHOTO,
+    'Selected personal photo must be a PERSONAL_PHOTO document',
+  );
+}
+
+export function selectedPhotoDocumentArchivedError(): ApiError {
+  return new ApiError(
+    HttpStatus.CONFLICT,
+    ERROR_CODES.DOCUMENT_ARCHIVED,
+    'Archived document cannot be selected as personal photo',
+  );
+}
+
+export function selectedPhotoDocumentUnavailableError(): ApiError {
+  return new ApiError(
+    HttpStatus.CONFLICT,
+    ERROR_CODES.DOCUMENT_UNAVAILABLE,
+    'Unavailable document cannot be selected as personal photo',
+  );
+}

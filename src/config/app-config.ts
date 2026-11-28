@@ -13,6 +13,8 @@ const DEFAULT_SESSION_ABSOLUTE_TIMEOUT_DAYS = 7;
 const DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES = 15;
 const DEFAULT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS = 60;
+const DEFAULT_FILE_OPERATION_LEASE_SECONDS = 120;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
 
 export interface AppConfig {
@@ -29,6 +31,8 @@ export interface AppConfig {
   readonly sessionCleanupIntervalMinutes: number;
   readonly privateStorageRoot: string;
   readonly uploadMaxBytes: number;
+  readonly fileOperationReconciliationIntervalSeconds: number;
+  readonly fileOperationLeaseSeconds: number;
 }
 
 export class ConfigurationError extends Error {
@@ -111,6 +115,20 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     1,
     MAX_UPLOAD_MAX_BYTES,
   );
+  const fileOperationReconciliationIntervalSeconds = parseInteger(
+    env.FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS,
+    'FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS',
+    DEFAULT_FILE_OPERATION_RECONCILIATION_INTERVAL_SECONDS,
+    1,
+    3600,
+  );
+  const fileOperationLeaseSeconds = parseInteger(
+    env.FILE_OPERATION_LEASE_SECONDS,
+    'FILE_OPERATION_LEASE_SECONDS',
+    DEFAULT_FILE_OPERATION_LEASE_SECONDS,
+    5,
+    3600,
+  );
 
   return {
     environment,
@@ -126,6 +144,8 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionCleanupIntervalMinutes,
     privateStorageRoot,
     uploadMaxBytes,
+    fileOperationReconciliationIntervalSeconds,
+    fileOperationLeaseSeconds,
   };
 }
 
