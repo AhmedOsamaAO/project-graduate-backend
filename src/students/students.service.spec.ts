@@ -407,8 +407,10 @@ function createFakeStudentsPrisma() {
       const doc: Document = {
         id: state.nextDocumentId++,
         studentId: overrides.studentId,
+        supervisorId: overrides.supervisorId ?? null,
         qualificationId: overrides.qualificationId ?? null,
         documentType: overrides.documentType,
+        description: overrides.description ?? null,
         originalFileName: overrides.originalFileName ?? 'photo.jpg',
         storageKey: overrides.storageKey ?? 'a'.repeat(64),
         mimeType: overrides.mimeType ?? 'image/jpeg',

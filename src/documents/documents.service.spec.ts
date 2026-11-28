@@ -1,15 +1,19 @@
 import { ChangeHistoryService } from '../change-history/change-history.service';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import {
+  AcademicRank,
   DocumentAvailability,
   DocumentType,
+  ExternalApprovalStatus,
   FileOperationKind,
   FileOperationStatus,
   Prisma,
+  SupervisorAffiliation,
   type Document,
   type FileOperation,
   type Student,
   type StudentQualification,
+  type Supervisor,
 } from '../generated/prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { StudentArchiveGuardRegistry } from '../students/student-archive-guard';
@@ -97,6 +101,25 @@ function createFakeDocumentsPrisma() {
         updatedAt: now,
       } satisfies StudentQualification,
     ],
+    supervisors: [
+      {
+        id: 1,
+        fullName: 'Dr. Supervisor One',
+        academicRank: AcademicRank.PROFESSOR,
+        affiliation: SupervisorAffiliation.EXTERNAL,
+        departmentId: null,
+        workplace: 'Cairo University',
+        phone: null,
+        email: null,
+        nationalId: null,
+        externalApprovalStatus: ExternalApprovalStatus.PENDING,
+        externalRejectionReason: null,
+        deactivatedAt: null,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies Supervisor,
+    ],
     documents: [] as Document[],
     fileOperations: [] as FileOperation[],
     history: [] as Array<{
@@ -121,10 +144,14 @@ function createFakeDocumentsPrisma() {
 
   const attachRelations = (doc: Document) => ({
     ...structuredClone(doc),
-    student: {
-      archivedAt:
-        state.students.find((s) => s.id === doc.studentId)?.archivedAt ?? null,
-    },
+    student:
+      doc.studentId === null
+        ? null
+        : {
+            archivedAt:
+              state.students.find((s) => s.id === doc.studentId)?.archivedAt ??
+              null,
+          },
     qualification:
       doc.qualificationId === null
         ? null
@@ -140,6 +167,12 @@ function createFakeDocumentsPrisma() {
     student: {
       findUnique: ({ where }: { where: { id: number } }) => {
         const found = getWorking().students.find((s) => s.id === where.id);
+        return Promise.resolve(found ? structuredClone(found) : null);
+      },
+    },
+    supervisor: {
+      findUnique: ({ where }: { where: { id: number } }) => {
+        const found = getWorking().supervisors.find((s) => s.id === where.id);
         return Promise.resolve(found ? structuredClone(found) : null);
       },
     },
@@ -196,15 +229,33 @@ function createFakeDocumentsPrisma() {
         const idx = working.documents.findIndex((d) => d.id === where.id);
         if (idx === -1) return Promise.reject(new Error('Missing document'));
         const current = working.documents[idx];
+        let nextQualificationId = current.qualificationId;
+        if (data.qualificationId !== undefined) {
+          nextQualificationId = data.qualificationId as number | null;
+        } else if (
+          data.qualification &&
+          typeof data.qualification === 'object'
+        ) {
+          const qualOp = data.qualification as {
+            disconnect?: boolean;
+            connect?: { id_studentId?: { id: number } };
+          };
+          if (qualOp.disconnect) {
+            nextQualificationId = null;
+          } else if (qualOp.connect?.id_studentId) {
+            nextQualificationId = qualOp.connect.id_studentId.id;
+          }
+        }
         const updated: Document = {
           ...current,
-          qualificationId:
-            data.qualificationId !== undefined
-              ? (data.qualificationId as number | null)
-              : current.qualificationId,
+          qualificationId: nextQualificationId,
           documentType:
             (data.documentType as DocumentType | undefined) ??
             current.documentType,
+          description:
+            data.description !== undefined
+              ? (data.description as string | null)
+              : current.description,
           archivedAt:
             data.archivedAt !== undefined
               ? (data.archivedAt as Date | null)
@@ -304,6 +355,12 @@ function createFakeDocumentsPrisma() {
         return false;
       }
       if (
+        where.supervisorId !== undefined &&
+        doc.supervisorId !== where.supervisorId
+      ) {
+        return false;
+      }
+      if (
         where.documentType !== undefined &&
         doc.documentType !== where.documentType
       ) {
@@ -362,16 +419,18 @@ function createFakeDocumentsPrisma() {
     getState: () => state,
     addDocument: (
       overrides: Partial<Document> & {
-        studentId: number;
         documentType: DocumentType;
       },
     ): Document => {
       const t = nextTime();
       const doc: Document = {
         id: state.nextDocId++,
-        studentId: overrides.studentId,
+        studentId:
+          overrides.studentId !== undefined ? overrides.studentId : null,
+        supervisorId: overrides.supervisorId ?? null,
         qualificationId: overrides.qualificationId ?? null,
         documentType: overrides.documentType,
+        description: overrides.description ?? null,
         originalFileName: overrides.originalFileName ?? 'doc.pdf',
         storageKey:
           overrides.storageKey ?? String(state.nextDocId).padStart(64, '0'),
@@ -570,6 +629,7 @@ describe('DocumentsService', () => {
       status: FileOperationStatus.COMPLETED,
       requestedByStaffUserId: actor.staffUserId,
       studentId: 1,
+      supervisorId: null,
       documentId: 9,
       idempotencyKey: 'op-key',
       requestFingerprint: 'a'.repeat(64),
@@ -602,5 +662,57 @@ describe('DocumentsService', () => {
     });
     expect(byId).not.toHaveProperty('storageKey');
     expect(byId).not.toHaveProperty('stagingKey');
+  });
+
+  it('supports listing, updating description, archiving, and restoring supervisor documents while rejecting incompatible owner fields', async () => {
+    const supDoc = fakeDb.addDocument({
+      supervisorId: 1,
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      description: 'Initial memo',
+      originalFileName: 'memo.pdf',
+    });
+
+    const page = await service.listSupervisorDocuments(1);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: supDoc.id,
+      studentId: null,
+      supervisorId: 1,
+      description: 'Initial memo',
+    });
+
+    await expect(
+      service.updateDocument(actor, supDoc.id, {
+        expectedVersion: 1,
+        qualificationId: 10,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.VALIDATION_ERROR });
+
+    await expect(
+      service.updateDocument(actor, supDoc.id, {
+        expectedVersion: 1,
+        documentType: DocumentType.OTHER,
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.VALIDATION_ERROR });
+
+    const updated = await service.updateDocument(actor, supDoc.id, {
+      expectedVersion: 1,
+      description: 'Updated external CV',
+    });
+    expect(updated).toMatchObject({
+      description: 'Updated external CV',
+      version: 2,
+    });
+
+    const archived = await service.archiveDocument(actor, supDoc.id, 2);
+    expect(archived.archivedAt).not.toBeNull();
+    expect(archived.version).toBe(3);
+
+    await expect(service.getDocument(supDoc.id)).rejects.toMatchObject({
+      code: ERROR_CODES.NOT_FOUND,
+    });
+
+    const restored = await service.restoreDocument(actor, supDoc.id, 3);
+    expect(restored).toMatchObject({ archivedAt: null, version: 4 });
   });
 });

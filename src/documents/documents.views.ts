@@ -5,8 +5,10 @@ export type DocumentViewSource = Pick<
   Document,
   | 'id'
   | 'studentId'
+  | 'supervisorId'
   | 'qualificationId'
   | 'documentType'
+  | 'description'
   | 'originalFileName'
   | 'mimeType'
   | 'byteSize'
@@ -25,8 +27,10 @@ export function documentView(row: DocumentViewSource) {
   return {
     id: row.id,
     studentId: row.studentId,
+    supervisorId: row.supervisorId,
     qualificationId: row.qualificationId,
     documentType: row.documentType,
+    description: row.description,
     originalFileName: row.originalFileName,
     mimeType: row.mimeType,
     byteSize: row.byteSize,
@@ -49,6 +53,7 @@ export type FileOperationViewSource = Pick<
   | 'kind'
   | 'status'
   | 'studentId'
+  | 'supervisorId'
   | 'documentId'
   | 'errorCode'
   | 'errorMessage'
@@ -64,6 +69,7 @@ export function fileOperationView(row: FileOperationViewSource) {
     kind: row.kind,
     status: row.status,
     studentId: row.studentId,
+    supervisorId: row.supervisorId,
     documentId: row.documentId,
     failureCode: row.errorCode,
     failureMessage: row.errorMessage,
@@ -76,11 +82,15 @@ export function fileOperationView(row: FileOperationViewSource) {
 export type FileOperationView = ReturnType<typeof fileOperationView>;
 
 export function toDocumentArchiveContext(
-  row: Pick<Document, 'id' | 'studentId' | 'documentType' | 'qualificationId'>,
+  row: Pick<
+    Document,
+    'id' | 'studentId' | 'supervisorId' | 'documentType' | 'qualificationId'
+  >,
 ): DocumentArchiveContext {
   return {
     documentId: row.id,
     studentId: row.studentId,
+    supervisorId: row.supervisorId,
     documentType: row.documentType,
     qualificationId: row.qualificationId,
   };

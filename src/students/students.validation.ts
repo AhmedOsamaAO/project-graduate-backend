@@ -58,7 +58,7 @@ export function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-function validateTrimmedPrintableText(
+export function validateTrimmedPrintableText(
   value: string,
   field: string,
   maxLength: number,
@@ -90,9 +90,10 @@ export function validateOptionalNullableText(
   return validateTrimmedPrintableText(value, field, maxLength);
 }
 
-function validateOptionalQueryText(
+export function validateOptionalQueryText(
   value: string | undefined,
   field: string,
+  maxLength = 200,
 ): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -104,10 +105,10 @@ function validateOptionalQueryText(
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.length > 200 || hasControlCharacters(trimmed)) {
+  if (trimmed.length > maxLength || hasControlCharacters(trimmed)) {
     throw validationError(
       field,
-      `${field} must contain at most 200 printable characters`,
+      `${field} must contain at most ${maxLength} printable characters`,
     );
   }
   return trimmed;

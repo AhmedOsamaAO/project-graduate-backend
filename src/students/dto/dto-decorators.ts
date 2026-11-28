@@ -23,6 +23,56 @@ export function TrimString() {
   );
 }
 
+export function TrimOptionalQueryString() {
+  return Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  });
+}
+
+export function OptionalQueryTextField(description: string, example: string) {
+  return applyDecorators(
+    ApiPropertyOptional({ description, maxLength: 200, example }),
+    TrimOptionalQueryString(),
+    ValidateIf((_obj, value) => value !== undefined),
+    IsString(),
+    MaxLength(200),
+    NoControlChars(),
+  );
+}
+
+export function OptionalQueryPositiveInt4Field(options: {
+  readonly example: number;
+  readonly description: string;
+}) {
+  return applyDecorators(
+    ApiPropertyOptional({
+      type: Number,
+      minimum: 1,
+      maximum: MAX_POSTGRES_INT4,
+      example: options.example,
+      description: options.description,
+    }),
+    Transform(({ value }: { value: unknown }) => {
+      if (value === undefined) {
+        return undefined;
+      }
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed === '' ? undefined : Number(trimmed);
+      }
+      return value;
+    }),
+    ValidateIf((_obj, value) => value !== undefined),
+    IsInt(),
+    Min(1),
+    Max(MAX_POSTGRES_INT4),
+  );
+}
+
 export function TransformQueryBoolean() {
   return Transform(({ value }: { value: unknown }) => {
     if (value === undefined || value === true || value === false) {

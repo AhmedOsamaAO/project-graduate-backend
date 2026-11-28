@@ -4,15 +4,19 @@ import { join } from 'node:path';
 import type { AppConfig } from '../config/app-config';
 import { ERROR_CODES } from '../common/errors/error-codes';
 import {
+  AcademicRank,
   DocumentAvailability,
   DocumentType,
+  ExternalApprovalStatus,
   FileOperationKind,
   FileOperationStatus,
   Prisma,
+  SupervisorAffiliation,
   type Document,
   type FileOperation,
   type Student,
   type StudentQualification,
+  type Supervisor,
 } from '../generated/prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { StudentArchiveGuardRegistry } from '../students/student-archive-guard';
@@ -22,7 +26,10 @@ import {
   FileOperationExecutor,
   type FileOperationFaultHook,
 } from './file-operation-executor';
-import { createBufferUploadSource } from './multipart-upload';
+import {
+  createBufferUploadSource,
+  createSupervisorBufferUploadSource,
+} from './multipart-upload';
 import { PrivateFileStorage } from './private-file-storage';
 
 function buildMinimalPdf(): Buffer {
@@ -83,6 +90,25 @@ function createFakeExecutorPrisma(initialNow: Date) {
         updatedAt: initialNow,
       } satisfies Student,
     ],
+    supervisors: [
+      {
+        id: 1,
+        fullName: 'Dr. External Supervisor',
+        academicRank: AcademicRank.PROFESSOR,
+        affiliation: SupervisorAffiliation.EXTERNAL,
+        departmentId: null,
+        workplace: 'Cairo University',
+        phone: null,
+        email: null,
+        nationalId: null,
+        externalApprovalStatus: ExternalApprovalStatus.PENDING,
+        externalRejectionReason: null,
+        deactivatedAt: null,
+        version: 1,
+        createdAt: initialNow,
+        updatedAt: initialNow,
+      } satisfies Supervisor,
+    ],
     qualifications: [] as StudentQualification[],
     documents: [] as Document[],
     fileOperations: [] as FileOperation[],
@@ -100,6 +126,12 @@ function createFakeExecutorPrisma(initialNow: Date) {
     student: {
       findUnique: ({ where }: { where: { id: number } }) => {
         const row = getState().students.find((s) => s.id === where.id);
+        return Promise.resolve(row ? structuredClone(row) : null);
+      },
+    },
+    supervisor: {
+      findUnique: ({ where }: { where: { id: number } }) => {
+        const row = getState().supervisors.find((s) => s.id === where.id);
         return Promise.resolve(row ? structuredClone(row) : null);
       },
     },
@@ -127,9 +159,11 @@ function createFakeExecutorPrisma(initialNow: Date) {
         const now = nextTime();
         const doc: Document = {
           id: working.nextDocumentId++,
-          studentId: data.studentId as number,
+          studentId: (data.studentId as number | null) ?? null,
+          supervisorId: (data.supervisorId as number | null) ?? null,
           qualificationId: (data.qualificationId as number | null) ?? null,
           documentType: data.documentType as DocumentType,
+          description: (data.description as string | null) ?? null,
           originalFileName: data.originalFileName as string,
           storageKey: data.storageKey as string,
           mimeType: data.mimeType as string,
@@ -210,7 +244,8 @@ function createFakeExecutorPrisma(initialNow: Date) {
             (data.status as FileOperationStatus) ??
             FileOperationStatus.IN_PROGRESS,
           requestedByStaffUserId: data.requestedByStaffUserId as number,
-          studentId: data.studentId as number,
+          studentId: (data.studentId as number | null) ?? null,
+          supervisorId: (data.supervisorId as number | null) ?? null,
           documentId: (data.documentId as number | null) ?? null,
           idempotencyKey: data.idempotencyKey as string,
           requestFingerprint:
@@ -468,6 +503,7 @@ describe('FileOperationExecutor', () => {
       status: FileOperationStatus.IN_PROGRESS,
       requestedByStaffUserId: actor.staffUserId,
       studentId: 1,
+      supervisorId: null,
       documentId: null,
       idempotencyKey: 'abandoned-op',
       requestFingerprint: null,
@@ -552,5 +588,54 @@ describe('FileOperationExecutor', () => {
     );
     expect(await readdir(join(storageRoot, 'staging'))).toEqual([]);
     expect(await readdir(join(storageRoot, 'objects'))).toEqual([]);
+  });
+
+  it('publishes supervisor uploads exclusively, enforces cross-owner idempotency conflicts, and returns sanitized owner fields', async () => {
+    const pdf = buildMinimalPdf();
+    const uploaded = await executor.executeSupervisorUpload(
+      actor,
+      1,
+      'sup-upload-key-1',
+      createSupervisorBufferUploadSource({
+        description: 'External supervision CV',
+        originalFileName: 'cv.pdf',
+        content: pdf,
+      }),
+    );
+
+    expect(uploaded.kind).toBe('COMPLETED');
+    if (uploaded.kind !== 'COMPLETED') throw new Error('expected completed');
+    expect(uploaded.document).toMatchObject({
+      studentId: null,
+      supervisorId: 1,
+      qualificationId: null,
+      documentType: DocumentType.SUPERVISOR_SUPPORTING_DOCUMENT,
+      description: 'External supervision CV',
+    });
+
+    await expect(
+      executor.executeStudentUpload(
+        actor,
+        1,
+        'sup-upload-key-1',
+        createBufferUploadSource({
+          documentType: DocumentType.OTHER,
+          originalFileName: 'cv.pdf',
+          content: pdf,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.IDEMPOTENCY_KEY_CONFLICT });
+
+    await expect(
+      executor.executeSupervisorUpload(
+        actor,
+        999,
+        'sup-missing-key',
+        createSupervisorBufferUploadSource({
+          originalFileName: 'cv.pdf',
+          content: pdf,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.NOT_FOUND });
   });
 });

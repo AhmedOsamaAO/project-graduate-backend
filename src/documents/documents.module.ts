@@ -9,6 +9,7 @@ import {
   DocumentsController,
   FileOperationsController,
   StudentDocumentsController,
+  SupervisorDocumentsController,
 } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import {
@@ -22,6 +23,7 @@ import { PrivateFileStorage } from './private-file-storage';
   imports: [ChangeHistoryModule, StudentsModule],
   controllers: [
     StudentDocumentsController,
+    SupervisorDocumentsController,
     DocumentsController,
     FileOperationsController,
   ],

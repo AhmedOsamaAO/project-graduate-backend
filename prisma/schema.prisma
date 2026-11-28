@@ -19,6 +19,7 @@ enum HistoryRecordType {
   STUDENT
   STUDENT_QUALIFICATION
   DOCUMENT
+  SUPERVISOR
 
   @@map("history_record_type")
 }
@@ -35,6 +36,7 @@ enum HistoryAction {
   DELETED
   ARCHIVED
   RESTORED
+  DEACTIVATED
 
   @@map("history_action")
 }
@@ -100,8 +102,33 @@ enum DocumentType {
   EQUIVALENCY_DECISION
   NON_ENROLLMENT_DECLARATION
   OTHER
+  SUPERVISOR_SUPPORTING_DOCUMENT
 
   @@map("document_type")
+}
+
+enum AcademicRank {
+  PROFESSOR
+  ASSOCIATE_PROFESSOR
+  LECTURER
+  ASSOCIATE_LECTURER
+
+  @@map("academic_rank")
+}
+
+enum SupervisorAffiliation {
+  INTERNAL
+  EXTERNAL
+
+  @@map("supervisor_affiliation")
+}
+
+enum ExternalApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("external_approval_status")
 }
 
 enum DocumentAvailability {
@@ -223,11 +250,40 @@ model Department {
   updatedAt      DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
   faculty        Faculty                @relation(fields: [facultyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   qualifications StudentQualification[]
+  supervisors    Supervisor[]
 
   @@unique([id, facultyId])
   @@unique([facultyId, name])
   @@index([name])
   @@map("department")
+}
+
+model Supervisor {
+  id                      Int                     @id @default(autoincrement())
+  fullName                String                  @map("full_name") @db.VarChar(200)
+  academicRank            AcademicRank            @map("academic_rank")
+  affiliation             SupervisorAffiliation
+  departmentId            Int?                    @map("department_id")
+  workplace               String?                 @db.VarChar(200)
+  phone                   String?                 @db.VarChar(50)
+  email                   String?                 @db.VarChar(254)
+  nationalId              String?                 @map("national_id") @db.VarChar(50)
+  externalApprovalStatus  ExternalApprovalStatus? @map("external_approval_status")
+  externalRejectionReason String?                 @map("external_rejection_reason") @db.VarChar(500)
+  deactivatedAt           DateTime?               @map("deactivated_at") @db.Timestamptz(3)
+  version                 Int                     @default(1)
+  createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  department              Department?             @relation(fields: [departmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  documents               Document[]              @relation("SupervisorDocuments")
+  fileOperations          FileOperation[]
+
+  @@index([deactivatedAt, id])
+  @@index([fullName])
+  @@index([nationalId])
+  @@index([departmentId])
+  @@index([affiliation, externalApprovalStatus])
+  @@map("supervisor")
 }
 
 model Student {
@@ -287,9 +343,11 @@ model StudentQualification {
 
 model Document {
   id                   Int                   @id @default(autoincrement())
-  studentId            Int                   @map("student_id")
+  studentId            Int?                  @map("student_id")
+  supervisorId         Int?                  @map("supervisor_id")
   qualificationId      Int?                  @map("qualification_id")
   documentType         DocumentType          @map("document_type")
+  description          String?               @db.VarChar(500)
   originalFileName     String                @map("original_file_name") @db.VarChar(255)
   storageKey           String                @unique @map("storage_key") @db.VarChar(64)
   mimeType             String                @map("mime_type") @db.VarChar(128)
@@ -302,7 +360,8 @@ model Document {
   version              Int                   @default(1)
   createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  student              Student               @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  student              Student?              @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supervisor           Supervisor?           @relation("SupervisorDocuments", fields: [supervisorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   qualification        StudentQualification? @relation(fields: [qualificationId, studentId], references: [id, studentId], onDelete: Restrict, onUpdate: Restrict)
   deletedByStaffUser   StaffUser?            @relation("DeletedDocuments", fields: [deletedByStaffUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   selectedByStudents   Student[]             @relation("StudentSelectedPhoto")
@@ -310,6 +369,7 @@ model Document {
 
   @@unique([id, studentId])
   @@index([studentId, archivedAt, availability, id])
+  @@index([supervisorId, archivedAt, availability, id])
   @@index([qualificationId])
   @@index([deletedByStaffUserId])
   @@map("document")
@@ -320,7 +380,8 @@ model FileOperation {
   kind                   FileOperationKind
   status                 FileOperationStatus @default(IN_PROGRESS)
   requestedByStaffUserId Int                 @map("requested_by_staff_user_id")
-  studentId              Int                 @map("student_id")
+  studentId              Int?                @map("student_id")
+  supervisorId           Int?                @map("supervisor_id")
   documentId             Int?                @map("document_id")
   idempotencyKey         String              @map("idempotency_key") @db.VarChar(128)
   requestFingerprint     String?             @map("request_fingerprint") @db.Char(64)
@@ -336,12 +397,14 @@ model FileOperation {
   updatedAt              DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   completedAt            DateTime?           @map("completed_at") @db.Timestamptz(3)
   requestedByStaffUser   StaffUser           @relation("RequestedFileOperations", fields: [requestedByStaffUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  student                Student             @relation(fields: [studentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  student                Student?            @relation(fields: [studentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supervisor             Supervisor?         @relation(fields: [supervisorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   document               Document?           @relation(fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([requestedByStaffUserId, kind, idempotencyKey])
   @@index([status, leaseExpiresAt, id])
   @@index([studentId])
+  @@index([supervisorId])
   @@index([documentId])
   @@map("file_operation")
 }
