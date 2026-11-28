@@ -37,8 +37,8 @@ import {
   validatePositiveInt4,
 } from '../students/students.validation';
 import {
+  assertActiveStudentQualificationInTx,
   computeUploadRequestFingerprint,
-  documentQualificationMismatchError,
   idempotencyKeyConflictError,
   uploadInterruptedError,
   validateIdempotencyKey,
@@ -286,14 +286,10 @@ export class FileOperationExecutor
       await this.triggerCutPoint('AFTER_ADMIT', operation.id);
 
       const received = await this.streamAndHashStagingFile(stagingKey, source);
-      const requestFingerprint = computeUploadRequestFingerprint({
+      const requestFingerprint = this.computeReceivedFingerprint(
         studentId,
-        documentType: received.documentType,
-        qualificationId: received.qualificationId,
-        originalFileName: received.originalFileName,
-        byteSize: received.byteSize,
-        contentSha256: received.contentSha256,
-      });
+        received,
+      );
 
       await this.persistFingerprintAndRenewLease(
         operation.id,
@@ -380,10 +376,7 @@ export class FileOperationExecutor
     | { readonly freshlyCreated: true; readonly operation: FileOperation }
     | { readonly freshlyCreated: false; readonly operation: FileOperation }
   > {
-    const now = this.clock.now();
-    const leaseExpiresAt = new Date(
-      now.getTime() + this.config.fileOperationLeaseSeconds * 1000,
-    );
+    const leaseExpiresAt = this.nextLeaseExpiry();
 
     try {
       const created = await this.prisma.fileOperation.create({
@@ -428,14 +421,10 @@ export class FileOperationExecutor
     const received = await source.hashWithoutStoring(
       this.config.uploadMaxBytes,
     );
-    const incomingFingerprint = computeUploadRequestFingerprint({
+    const incomingFingerprint = this.computeReceivedFingerprint(
       studentId,
-      documentType: received.documentType,
-      qualificationId: received.qualificationId,
-      originalFileName: received.originalFileName,
-      byteSize: received.byteSize,
-      contentSha256: received.contentSha256,
-    });
+      received,
+    );
 
     if (existing.studentId !== studentId) {
       throw idempotencyKeyConflictError();
@@ -508,10 +497,7 @@ export class FileOperationExecutor
     claimToken: string,
     requestFingerprint: string,
   ): Promise<void> {
-    const now = this.clock.now();
-    const leaseExpiresAt = new Date(
-      now.getTime() + this.config.fileOperationLeaseSeconds * 1000,
-    );
+    const leaseExpiresAt = this.nextLeaseExpiry();
     const updated = await this.prisma.fileOperation.updateMany({
       where: {
         id: operationId,
@@ -574,23 +560,12 @@ export class FileOperationExecutor
 
         if (input.received.qualificationId !== null) {
           await tx.$queryRaw`SELECT id FROM student_qualification WHERE id = ${input.received.qualificationId} FOR SHARE`;
-          const qualification = await tx.studentQualification.findUnique({
-            where: { id: input.received.qualificationId },
-            select: { id: true, studentId: true, archivedAt: true },
-          });
-          if (!qualification) {
-            throw notFoundError('Qualification not found');
-          }
-          if (qualification.studentId !== input.studentId) {
-            throw documentQualificationMismatchError();
-          }
-          if (qualification.archivedAt !== null) {
-            throw new ApiError(
-              HttpStatus.CONFLICT,
-              ERROR_CODES.QUALIFICATION_ARCHIVED,
-              'Archived qualification must be restored before attaching documents',
-            );
-          }
+          await assertActiveStudentQualificationInTx(
+            tx,
+            input.received.qualificationId,
+            input.studentId,
+            'Archived qualification must be restored before attaching documents',
+          );
         }
 
         const created = await tx.document.create({
@@ -668,10 +643,7 @@ export class FileOperationExecutor
     failure: SanitizedFailure,
   ): Promise<void> {
     const cleanupToken = randomBytes(32).toString('hex');
-    const now = this.clock.now();
-    const leaseExpiresAt = new Date(
-      now.getTime() + this.config.fileOperationLeaseSeconds * 1000,
-    );
+    const leaseExpiresAt = this.nextLeaseExpiry();
 
     const claimed = await this.transactions
       .run(undefined, async (tx) => {
@@ -733,13 +705,7 @@ export class FileOperationExecutor
       if (this.inFlightIds.has(candidate.id)) {
         continue;
       }
-      const isExpired =
-        candidate.leaseExpiresAt === null ||
-        candidate.leaseExpiresAt.getTime() <= now.getTime();
-      const isForeignOnStartup =
-        includeForeignActive && candidate.executorId !== this.executorId;
-
-      if (!isExpired && !isForeignOnStartup) {
+      if (!this.isOperationReclaimable(candidate, now, includeForeignActive)) {
         continue;
       }
 
@@ -775,9 +741,7 @@ export class FileOperationExecutor
     includeForeignActive: boolean,
   ): Promise<FileOperation | null> {
     const now = this.clock.now();
-    const leaseExpiresAt = new Date(
-      now.getTime() + this.config.fileOperationLeaseSeconds * 1000,
-    );
+    const leaseExpiresAt = this.nextLeaseExpiry(now);
 
     return this.transactions.run(undefined, async (tx) => {
       if (this.inFlightIds.has(operationId)) {
@@ -792,12 +756,7 @@ export class FileOperationExecutor
       ) {
         return null;
       }
-      const isExpired =
-        op.leaseExpiresAt === null ||
-        op.leaseExpiresAt.getTime() <= now.getTime();
-      const isForeignOnStartup =
-        includeForeignActive && op.executorId !== this.executorId;
-      if (!isExpired && !isForeignOnStartup) {
+      if (!this.isOperationReclaimable(op, now, includeForeignActive)) {
         return null;
       }
 
@@ -880,6 +839,39 @@ export class FileOperationExecutor
           errorMessage: op.errorMessage ?? input.fallbackFailure.message,
         },
       });
+    });
+  }
+
+  private nextLeaseExpiry(now = this.clock.now()): Date {
+    return new Date(
+      now.getTime() + this.config.fileOperationLeaseSeconds * 1000,
+    );
+  }
+
+  private isOperationReclaimable(
+    op: Pick<FileOperation, 'leaseExpiresAt' | 'executorId'>,
+    now: Date,
+    includeForeignActive: boolean,
+  ): boolean {
+    const isExpired =
+      op.leaseExpiresAt === null ||
+      op.leaseExpiresAt.getTime() <= now.getTime();
+    const isForeignOnStartup =
+      includeForeignActive && op.executorId !== this.executorId;
+    return isExpired || isForeignOnStartup;
+  }
+
+  private computeReceivedFingerprint(
+    studentId: number,
+    received: ReceivedUploadFile,
+  ): string {
+    return computeUploadRequestFingerprint({
+      studentId,
+      documentType: received.documentType,
+      qualificationId: received.qualificationId,
+      originalFileName: received.originalFileName,
+      byteSize: received.byteSize,
+      contentSha256: received.contentSha256,
     });
   }
 

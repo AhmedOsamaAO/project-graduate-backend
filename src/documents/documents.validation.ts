@@ -10,6 +10,7 @@ import {
 import {
   STUDENT_ARCHIVE_FILTERS,
   hasControlCharacters,
+  notFoundError,
   validatePositiveInt4,
   validationError,
   type SortDirection,
@@ -330,4 +331,33 @@ export function uploadInterruptedError(
     ERROR_CODES.UPLOAD_INTERRUPTED,
     message,
   );
+}
+
+/**
+ * Verifies inside an active transaction that the qualification exists, belongs
+ * to the expected student, and is not archived (caller acquires FOR SHARE first).
+ */
+export async function assertActiveStudentQualificationInTx(
+  tx: Prisma.TransactionClient,
+  qualificationId: number,
+  expectedStudentId: number,
+  archivedMessage = 'Archived qualification must be restored before changing attached documents',
+): Promise<void> {
+  const qualification = await tx.studentQualification.findUnique({
+    where: { id: qualificationId },
+    select: { id: true, studentId: true, archivedAt: true },
+  });
+  if (!qualification) {
+    throw notFoundError('Qualification not found');
+  }
+  if (qualification.studentId !== expectedStudentId) {
+    throw documentQualificationMismatchError();
+  }
+  if (qualification.archivedAt !== null) {
+    throw new ApiError(
+      HttpStatus.CONFLICT,
+      ERROR_CODES.QUALIFICATION_ARCHIVED,
+      archivedMessage,
+    );
+  }
 }

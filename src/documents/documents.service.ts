@@ -31,6 +31,7 @@ import {
 } from '../students/students.validation';
 import { DocumentArchiveGuardRegistry } from './document-archive-guard';
 import {
+  assertActiveStudentQualificationInTx,
   buildContentDisposition,
   buildDocumentOrderBy,
   documentAlreadyArchivedError,
@@ -38,7 +39,6 @@ import {
   documentDeletePendingError,
   documentDeletedError,
   documentNotArchivedError,
-  documentQualificationMismatchError,
   documentSelectedAsPhotoError,
   invalidDocumentTypeForMimeError,
   validateDocumentDisposition,
@@ -208,16 +208,7 @@ export class DocumentsService {
       validateOptionalBoolean(options.includeArchived, 'includeArchived') ??
       false;
 
-    const row = await this.prisma.document.findUnique({
-      where: { id: validId },
-      include: {
-        student: { select: { archivedAt: true } },
-        qualification: { select: { archivedAt: true } },
-      },
-    });
-    if (!row || !isDocumentVisible(row, includeArchived)) {
-      throw notFoundError('Document not found');
-    }
+    const row = await this.findVisibleDocumentOrThrow(validId, includeArchived);
     return documentView(row);
   }
 
@@ -231,16 +222,7 @@ export class DocumentsService {
       false;
     const disposition = validateDocumentDisposition(options.disposition);
 
-    const row = await this.prisma.document.findUnique({
-      where: { id: validId },
-      include: {
-        student: { select: { archivedAt: true } },
-        qualification: { select: { archivedAt: true } },
-      },
-    });
-    if (!row || !isDocumentVisible(row, includeArchived)) {
-      throw notFoundError('Document not found');
-    }
+    const row = await this.findVisibleDocumentOrThrow(validId, includeArchived);
     assertAvailableDocument(row.availability);
 
     const stream = await this.storage.openReadableObject(
@@ -259,6 +241,23 @@ export class DocumentsService {
       byteSize: row.byteSize,
       contentDisposition,
     };
+  }
+
+  private async findVisibleDocumentOrThrow(
+    id: number,
+    includeArchived: boolean,
+  ): Promise<Document> {
+    const row = await this.prisma.document.findUnique({
+      where: { id },
+      include: {
+        student: { select: { archivedAt: true } },
+        qualification: { select: { archivedAt: true } },
+      },
+    });
+    if (!row || !isDocumentVisible(row, includeArchived)) {
+      throw notFoundError('Document not found');
+    }
+    return row;
   }
 
   uploadStudentDocument(
@@ -598,30 +597,6 @@ async function lockDocument(
 ): Promise<Document | null> {
   await tx.$queryRaw`SELECT id FROM document WHERE id = ${id} FOR UPDATE`;
   return tx.document.findUnique({ where: { id } });
-}
-
-async function assertActiveStudentQualificationInTx(
-  tx: Prisma.TransactionClient,
-  qualificationId: number,
-  expectedStudentId: number,
-): Promise<void> {
-  const qualification = await tx.studentQualification.findUnique({
-    where: { id: qualificationId },
-    select: { id: true, studentId: true, archivedAt: true },
-  });
-  if (!qualification) {
-    throw notFoundError('Qualification not found');
-  }
-  if (qualification.studentId !== expectedStudentId) {
-    throw documentQualificationMismatchError();
-  }
-  if (qualification.archivedAt !== null) {
-    throw new ApiError(
-      HttpStatus.CONFLICT,
-      ERROR_CODES.QUALIFICATION_ARCHIVED,
-      'Archived qualification must be restored before changing attached documents',
-    );
-  }
 }
 
 function assertAvailableDocument(availability: DocumentAvailability): void {
