@@ -1,5 +1,6 @@
 import {
   isForeignKeyConstraintError,
+  isRestrictViolationError,
   isRetryableTransactionError,
   isUniqueConstraintError,
 } from './prisma-errors';
@@ -59,12 +60,30 @@ describe('prisma error helpers', () => {
     expect(isForeignKeyConstraintError(shape)).toBe(false);
   });
 
+  it.each([
+    { code: '23001' },
+    { cause: { originalCode: '23001' } },
+    { meta: { code: '23001' } },
+    { meta: { driverAdapterError: { cause: { originalCode: '23001' } } } },
+    { meta: { driverAdapterError: { cause: { code: '23001' } } } },
+  ])('recognizes restrict violation errors for %j', (shape) => {
+    expect(isRestrictViolationError(shape)).toBe(true);
+    expect(isForeignKeyConstraintError(shape)).toBe(true);
+    expect(isUniqueConstraintError(shape)).toBe(false);
+  });
+
   it.each([null, undefined, 'string', {}, { code: 'P2025' }])(
     'returns false for non-matching errors %j',
     (value) => {
       expect(isUniqueConstraintError(value)).toBe(false);
       expect(isForeignKeyConstraintError(value)).toBe(false);
+      expect(isRestrictViolationError(value)).toBe(false);
       expect(isRetryableTransactionError(value)).toBe(false);
     },
   );
+
+  it('does not treat generic 23503 foreign key violations as restrict violations', () => {
+    expect(isRestrictViolationError({ code: '23503' })).toBe(false);
+    expect(isForeignKeyConstraintError({ code: '23503' })).toBe(true);
+  });
 });

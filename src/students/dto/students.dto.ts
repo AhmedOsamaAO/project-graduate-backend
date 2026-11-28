@@ -2,23 +2,15 @@ import { applyDecorators } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
-  IsBoolean,
   IsEnum,
   IsIn,
-  IsInt,
   IsNotEmpty,
   IsString,
   Matches,
-  Max,
   MaxLength,
-  Min,
   ValidateIf,
-  registerDecorator,
-  type ValidationOptions,
 } from 'class-validator';
-import { parseCalendarDate } from '../../common/dates/office-calendar';
 import { PageQueryDto } from '../../common/http/page-query.dto';
-import { MAX_POSTGRES_INT4 } from '../../common/http/parse-positive-int.pipe';
 import { MilitaryStatus } from '../../generated/prisma/client';
 import {
   SORT_DIRECTIONS,
@@ -26,18 +18,19 @@ import {
   STUDENT_NATIONAL_ID_PATTERN,
   STUDENT_NATIONAL_ID_SEARCH_PATTERN,
   STUDENT_SORT_FIELDS,
-  hasControlCharacters,
   normalizeArabicIndicDigits,
   type SortDirection,
   type StudentArchiveFilter,
   type StudentSortField,
 } from '../students.validation';
-
-function TrimString() {
-  return Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  );
-}
+import {
+  NoControlChars,
+  OptionalIncludeArchivedField,
+  OptionalNullableCalendarDateField,
+  OptionalNullableTextField,
+  PositiveInt4Field,
+  TrimString,
+} from './dto-decorators';
 
 function TrimOptionalQueryString() {
   return Transform(({ value }: { value: unknown }) => {
@@ -47,72 +40,6 @@ function TrimOptionalQueryString() {
     const trimmed = value.trim();
     return trimmed.length === 0 ? undefined : trimmed;
   });
-}
-
-function TransformQueryBoolean() {
-  return Transform(({ value }: { value: unknown }) => {
-    if (value === undefined || value === true || value === false) {
-      return value;
-    }
-    if (value === 'true') {
-      return true;
-    }
-    if (value === 'false') {
-      return false;
-    }
-    return value;
-  });
-}
-
-function NoControlChars(validationOptions?: ValidationOptions) {
-  return (object: object, propertyName: string) => {
-    registerDecorator({
-      name: 'studentNoControlChars',
-      target: object.constructor,
-      propertyName,
-      options: validationOptions,
-      validator: {
-        validate(value: unknown): boolean {
-          return typeof value === 'string' && !hasControlCharacters(value);
-        },
-        defaultMessage(args): string {
-          return `${args?.property ?? 'value'} must not contain control characters`;
-        },
-      },
-    });
-  };
-}
-
-function IsCalendarDate(validationOptions?: ValidationOptions) {
-  return (object: object, propertyName: string) => {
-    registerDecorator({
-      name: 'isCalendarDate',
-      target: object.constructor,
-      propertyName,
-      options: validationOptions,
-      validator: {
-        validate(value: unknown): boolean {
-          return typeof value === 'string' && parseCalendarDate(value) !== null;
-        },
-        defaultMessage(args): string {
-          return `${args?.property ?? 'value'} must be a valid YYYY-MM-DD calendar date`;
-        },
-      },
-    });
-  };
-}
-
-function PositiveInt4Field(example: number) {
-  return applyDecorators(
-    ApiProperty({
-      minimum: 1,
-      maximum: MAX_POSTGRES_INT4,
-      example,
-    }),
-    IsInt(),
-    Min(1),
-    Max(MAX_POSTGRES_INT4),
-  );
 }
 
 function StudentFullNameField(optional: boolean) {
@@ -160,40 +87,6 @@ function StudentNationalIdField(optional: boolean) {
   );
 }
 
-function OptionalNullableTextField(options: {
-  readonly maxLength: number;
-  readonly example: string;
-}) {
-  return applyDecorators(
-    ApiPropertyOptional({
-      type: String,
-      nullable: true,
-      maxLength: options.maxLength,
-      example: options.example,
-    }),
-    ValidateIf((_obj, value) => value !== undefined && value !== null),
-    TrimString(),
-    IsString(),
-    IsNotEmpty(),
-    MaxLength(options.maxLength),
-    NoControlChars(),
-  );
-}
-
-function OptionalNullableBirthDateField() {
-  return applyDecorators(
-    ApiPropertyOptional({
-      type: String,
-      format: 'date',
-      nullable: true,
-      example: '1999-05-14',
-    }),
-    ValidateIf((_obj, value) => value !== undefined && value !== null),
-    IsString(),
-    IsCalendarDate(),
-  );
-}
-
 function OptionalNullableMilitaryStatusField() {
   return applyDecorators(
     ApiPropertyOptional({
@@ -214,20 +107,6 @@ function OptionalQueryTextField(description: string, example: string) {
     IsString(),
     MaxLength(200),
     NoControlChars(),
-  );
-}
-
-function OptionalIncludeArchivedField() {
-  return applyDecorators(
-    ApiPropertyOptional({
-      type: Boolean,
-      default: false,
-      description:
-        'Include archived student records when explicitly requested.',
-    }),
-    TransformQueryBoolean(),
-    ValidateIf((_obj, value) => value !== undefined),
-    IsBoolean(),
   );
 }
 
@@ -293,12 +172,16 @@ export class ListStudentsQueryDto extends PageQueryDto {
 }
 
 export class GetStudentQueryDto {
-  @OptionalIncludeArchivedField()
+  @OptionalIncludeArchivedField(
+    'Include archived student records when explicitly requested.',
+  )
   includeArchived?: boolean;
 }
 
 export class StudentHistoryQueryDto extends PageQueryDto {
-  @OptionalIncludeArchivedField()
+  @OptionalIncludeArchivedField(
+    'Include archived student records when explicitly requested.',
+  )
   includeArchived?: boolean;
 }
 
@@ -312,7 +195,7 @@ export class CreateStudentDto {
   @OptionalNullableTextField({ maxLength: 50, example: '01001234567' })
   phone?: string | null;
 
-  @OptionalNullableBirthDateField()
+  @OptionalNullableCalendarDateField('1999-05-14')
   birthDate?: string | null;
 
   @OptionalNullableTextField({
@@ -338,7 +221,7 @@ export class UpdateStudentDto {
   @OptionalNullableTextField({ maxLength: 50, example: '01001234567' })
   phone?: string | null;
 
-  @OptionalNullableBirthDateField()
+  @OptionalNullableCalendarDateField('1999-05-14')
   birthDate?: string | null;
 
   @OptionalNullableTextField({

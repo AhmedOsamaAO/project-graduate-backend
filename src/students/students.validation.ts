@@ -76,7 +76,7 @@ function validateTrimmedPrintableText(
   return trimmed;
 }
 
-function validateOptionalNullableText(
+export function validateOptionalNullableText(
   value: string | null | undefined,
   field: string,
   maxLength: number,
@@ -150,33 +150,38 @@ export function validateOptionalAddress(
   return validateOptionalNullableText(value, 'address', 500);
 }
 
-export function validateOptionalBirthDate(
+export function validateOptionalOfficeDate(
   value: string | null | undefined,
+  field: string,
   now: Date = new Date(),
 ): Date | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === null) {
-    return null;
+  if (value === undefined || value === null) {
+    return value;
   }
   if (typeof value !== 'string') {
-    throw validationError('birthDate', 'birthDate must be a YYYY-MM-DD date');
+    throw validationError(field, `${field} must be a YYYY-MM-DD date`);
   }
   const parsed = parseCalendarDate(value);
   if (!parsed) {
     throw validationError(
-      'birthDate',
-      'birthDate must be a valid YYYY-MM-DD calendar date',
+      field,
+      `${field} must be a valid YYYY-MM-DD calendar date`,
     );
   }
   if (isFutureOfficeDate(value, now)) {
     throw validationError(
-      'birthDate',
-      'birthDate cannot be in the future for Africa/Cairo',
+      field,
+      `${field} cannot be in the future for Africa/Cairo`,
     );
   }
   return parsed;
+}
+
+export function validateOptionalBirthDate(
+  value: string | null | undefined,
+  now: Date = new Date(),
+): Date | null | undefined {
+  return validateOptionalOfficeDate(value, 'birthDate', now);
 }
 
 export function validateOptionalMilitaryStatus(

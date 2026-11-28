@@ -17,6 +17,7 @@ enum HistoryRecordType {
   FACULTY
   DEPARTMENT
   STUDENT
+  STUDENT_QUALIFICATION
 
   @@map("history_record_type")
 }
@@ -63,6 +64,26 @@ enum MilitaryStatus {
   POSTPONED
 
   @@map("military_status")
+}
+
+enum DegreeLevel {
+  BACHELOR
+  MASTER
+  PHD
+  PROFESSIONAL
+
+  @@map("degree_level")
+}
+
+enum EquivalencyStatus {
+  NOT_ASSESSED
+  NOT_REQUIRED
+  REQUIRED
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("equivalency_status")
 }
 
 model StaffUser {
@@ -118,13 +139,14 @@ model ChangeHistory {
 }
 
 model EducationalInstitution {
-  id              Int             @id @default(autoincrement())
-  name            String          @db.VarChar(200)
-  institutionType InstitutionType @map("institution_type")
-  version         Int             @default(1)
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id              Int                    @id @default(autoincrement())
+  name            String                 @db.VarChar(200)
+  institutionType InstitutionType        @map("institution_type")
+  version         Int                    @default(1)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
   faculties       Faculty[]
+  qualifications  StudentQualification[]
 
   @@index([institutionType])
   @@index([name])
@@ -132,49 +154,84 @@ model EducationalInstitution {
 }
 
 model Faculty {
-  id            Int                    @id @default(autoincrement())
-  institutionId Int                    @map("institution_id")
-  name          String                 @db.VarChar(200)
-  version       Int                    @default(1)
-  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  institution   EducationalInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  departments   Department[]
+  id             Int                    @id @default(autoincrement())
+  institutionId  Int                    @map("institution_id")
+  name           String                 @db.VarChar(200)
+  version        Int                    @default(1)
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  institution    EducationalInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  departments    Department[]
+  qualifications StudentQualification[]
 
+  @@unique([id, institutionId])
   @@unique([institutionId, name])
   @@index([name])
   @@map("faculty")
 }
 
 model Department {
-  id        Int      @id @default(autoincrement())
-  facultyId Int      @map("faculty_id")
-  name      String   @db.VarChar(200)
-  version   Int      @default(1)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  faculty   Faculty  @relation(fields: [facultyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id             Int                    @id @default(autoincrement())
+  facultyId      Int                    @map("faculty_id")
+  name           String                 @db.VarChar(200)
+  version        Int                    @default(1)
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  faculty        Faculty                @relation(fields: [facultyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  qualifications StudentQualification[]
 
+  @@unique([id, facultyId])
   @@unique([facultyId, name])
   @@index([name])
   @@map("department")
 }
 
 model Student {
-  id                      Int             @id @default(autoincrement())
-  fullName                String          @map("full_name") @db.VarChar(200)
-  nationalId              String          @unique @map("national_id") @db.VarChar(14)
-  phone                   String?         @db.VarChar(50)
-  birthDate               DateTime?       @map("birth_date") @db.Date
-  address                 String?         @db.VarChar(500)
-  militaryStatus          MilitaryStatus? @map("military_status")
-  selectedPhotoDocumentId Int?            @map("selected_photo_document_id")
-  archivedAt              DateTime?       @map("archived_at") @db.Timestamptz(3)
-  version                 Int             @default(1)
-  createdAt               DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt               DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                      Int                    @id @default(autoincrement())
+  fullName                String                 @map("full_name") @db.VarChar(200)
+  nationalId              String                 @unique @map("national_id") @db.VarChar(14)
+  phone                   String?                @db.VarChar(50)
+  birthDate               DateTime?              @map("birth_date") @db.Date
+  address                 String?                @db.VarChar(500)
+  militaryStatus          MilitaryStatus?        @map("military_status")
+  selectedPhotoDocumentId Int?                   @map("selected_photo_document_id")
+  archivedAt              DateTime?              @map("archived_at") @db.Timestamptz(3)
+  version                 Int                    @default(1)
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  qualifications          StudentQualification[]
 
   @@index([archivedAt, id])
   @@index([fullName])
   @@map("student")
+}
+
+model StudentQualification {
+  id                        Int                     @id @default(autoincrement())
+  studentId                 Int                     @map("student_id")
+  degreeLevel               DegreeLevel             @map("degree_level")
+  qualificationName         String?                 @map("qualification_name") @db.VarChar(200)
+  institutionId             Int?                    @map("institution_id")
+  facultyId                 Int?                    @map("faculty_id")
+  departmentId              Int?                    @map("department_id")
+  graduationYear            Int?                    @map("graduation_year")
+  overallGrade              String?                 @map("overall_grade") @db.VarChar(100)
+  equivalencyStatus         EquivalencyStatus       @default(NOT_ASSESSED) @map("equivalency_status")
+  equivalencyDecisionNumber String?                 @map("equivalency_decision_number") @db.VarChar(100)
+  equivalencyDecisionDate   DateTime?               @map("equivalency_decision_date") @db.Date
+  archivedAt                DateTime?               @map("archived_at") @db.Timestamptz(3)
+  version                   Int                     @default(1)
+  createdAt                 DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  student                   Student                 @relation(fields: [studentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  institution               EducationalInstitution? @relation(fields: [institutionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  faculty                   Faculty?                @relation(fields: [facultyId, institutionId], references: [id, institutionId], onDelete: Restrict, onUpdate: Restrict)
+  department                Department?             @relation(fields: [departmentId, facultyId], references: [id, facultyId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([id, studentId])
+  @@index([studentId, archivedAt, id])
+  @@index([institutionId])
+  @@index([facultyId])
+  @@index([departmentId])
+  @@map("student_qualification")
 }

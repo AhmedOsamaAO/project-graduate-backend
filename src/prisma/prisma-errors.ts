@@ -46,11 +46,16 @@ function hasDriverAdapterCauseKind(error: unknown, kind: string): boolean {
 }
 
 const UNIQUE_CONSTRAINT_CODES = new Set(['P2002', '23505']);
+const RESTRICT_VIOLATION_CODES = new Set(['23001']);
 const FOREIGN_KEY_CONSTRAINT_CODES = new Set(['P2003', '23503', '23001']);
 const RETRYABLE_TRANSACTION_CODES = new Set(['P2034', '40001', '40P01']);
 
 export function isUniqueConstraintError(error: unknown): boolean {
   return hasDatabaseCode(error, UNIQUE_CONSTRAINT_CODES);
+}
+
+export function isRestrictViolationError(error: unknown): boolean {
+  return hasDatabaseCode(error, RESTRICT_VIOLATION_CODES);
 }
 
 export function isForeignKeyConstraintError(error: unknown): boolean {
